@@ -1,5 +1,5 @@
 *.o
-
+.vs/
 # ignore phpized files
 Makefile.global
 acinclude.m4
