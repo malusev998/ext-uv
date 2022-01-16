@@ -32,3 +32,28 @@ ZEND_COLD zend_string* php_uv_concat_ce_names(zend_class_entry* ce, zend_class_e
 	smart_str_0(&buf);
 	return buf.s;
 }
+
+/* gcc complains: sorry, unimplemented: function ‘uv_parse_arg_object’ can never be inlined because it uses variable argument lists */
+#ifdef __clang__
+zend_always_inline int uv_parse_arg_object(zval* arg, zval** dest, int check_null, zend_class_entry* ce, ...) {
+#else
+int uv_parse_arg_object(zval * arg, zval * *dest, int check_null, zend_class_entry * ce, ...) {
+#endif
+	if (EXPECTED(Z_TYPE_P(arg) == IS_OBJECT)) {
+		va_list va;
+		zend_class_entry* argce = Z_OBJCE_P(arg);
+		va_start(va, ce);
+		do {
+			if (instanceof_function(argce, ce)) {
+				*dest = arg;
+				return 1;
+			}
+			ce = (zend_class_entry*)va_arg(va, zend_class_entry*);
+		} while (ce);
+	}
+	else if (check_null && EXPECTED(Z_TYPE_P(arg) == IS_NULL)) {
+		*dest = NULL;
+		return 1;
+	}
+	return 0;
+}

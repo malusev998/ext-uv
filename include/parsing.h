@@ -2,6 +2,7 @@
 #define PHP_UV_PARSING_H
 
 ZEND_COLD zend_string* php_uv_concat_ce_names(zend_class_entry* ce, zend_class_entry* next, ...);
+int uv_parse_arg_object(zval* arg, zval** dest, int check_null, zend_class_entry* ce, ...);
 
 #define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_parameter_class_error(__VA_ARGS__)
 #define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0, 0)
