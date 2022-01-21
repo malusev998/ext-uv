@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
+
 project(uv
           VERSION 0.3.0
           LANGUAGES C)
@@ -10,11 +11,11 @@ if (NOT CMAKE_BUILD_TYPE)
             "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 endif ()
 
-set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD 11)
 
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb -O0 -Wall -std=gnu99 -fvisibility=hidden")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb -O0 -Wall -std=c17 -fvisibility=hidden")
 
 set(LIBUV_VERSION 1.34)
 
@@ -57,7 +58,18 @@ add_custom_target(configure
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 add_library(uv SHARED
-        ${SOURCE_FILES}  "include/parsing.h" "include/register.h" "src/register_class.c" "src/parsing.c" "src/locks/semaphore.c" "src/locks/mutex.c" "src/locks/rwlock.c" "src/locks/php_lock.h" "src/locks/php_lock.c" "src/locks/locks.c" "include/init.h")
-#add_library(___ EXCLUDE_FROM_ALL ${SOURCE_FILES})
+        ${SOURCE_FILES}  
+        "include/parsing.h" 
+        "include/register.h" 
+        "src/register_class.c" 
+        "src/parsing.c" 
+        "src/locks/semaphore.c" 
+        "src/locks/mutex.c" 
+        "src/locks/rwlock.c"
+        "src/locks/php_lock.h" 
+        "src/locks/php_lock.c"
+        "src/locks/locks.c" 
+        "include/init.h" "src/fs.h" "src/fs/fd.c")
+add_library(___ EXCLUDE_FROM_ALL ${SOURCE_FILES} "src/fs.h" "src/fs/fd.c")
 
 message(STATUS "End cmaking of PHP extension")

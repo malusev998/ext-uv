@@ -16,8 +16,8 @@ static zend_object* php_uv_create_uv(zend_class_entry* ce) {
 	zend_object_std_init(&uv->std, ce);
 	uv->std.handlers = &uv_handlers;
 
-	for (int ix = 0; ix < PHP_UV_CB_MAX; ix++) {			
-		uv->callback[ix] = NULL; 
+	for (int i = 0; i < PHP_UV_CB_MAX; i++) {			
+		uv->callback[i] = NULL; 
 	} 
 
 	ZVAL_UNDEF(&uv->fs_fd); 
