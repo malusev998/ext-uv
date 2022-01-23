@@ -31,7 +31,7 @@
 #include "src/locks.h"
 
 #ifndef PHP_UV_DEBUG
-#define PHP_UV_DEBUG 0
+	#define PHP_UV_DEBUG 0
 #endif
 
 #if defined(ZTS) && PHP_VERSION_ID < 80000
@@ -47,30 +47,6 @@
 #endif
 
 ZEND_DECLARE_MODULE_GLOBALS(uv);
-
-/* gcc complains: sorry, unimplemented: function ‘uv_parse_arg_object’ can never be inlined because it uses variable argument lists */
-#ifdef __clang__
-static zend_always_inline int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
-#else
-static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
-#endif
-	if (EXPECTED(Z_TYPE_P(arg) == IS_OBJECT)) {
-		va_list va;
-		zend_class_entry *argce = Z_OBJCE_P(arg);
-		va_start(va, ce);
-		do {
-			if (instanceof_function(argce, ce)) {
-				*dest = arg;
-				return 1;
-			}
-			ce = (zend_class_entry *) va_arg(va, zend_class_entry *);
-		} while (ce);
-	} else if (check_null && EXPECTED(Z_TYPE_P(arg) == IS_NULL)) {
-		*dest = NULL;
-		return 1;
-	}
-	return 0;
-}
 
 
 #define PHP_UV_INIT_CONNECT(req, uv) \
@@ -122,16 +98,6 @@ static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_clas
 		PHP_UV_DEINIT_UV(uv); \
 		php_error_docref(NULL, E_WARNING, "uv_" #func " failed"); \
 		return; \
-	}
-
-#define PHP_UV_INIT_ZVALS(uv) \
-	{ \
-		int ix = 0;\
-		for (ix = 0; ix < PHP_UV_CB_MAX; ix++) {\
-			uv->callback[ix] = NULL;\
-		} \
-		ZVAL_UNDEF(&(uv)->fs_fd); \
-		ZVAL_UNDEF(&(uv)->fs_fd_alt); \
 	}
 
 
@@ -189,8 +155,6 @@ static zend_class_entry *uv_sockaddr_ce;
 
 static zend_class_entry *uv_sockaddr_ipv4_ce;
 static zend_class_entry *uv_sockaddr_ipv6_ce;
-
-
 
 static zend_class_entry *uv_stdio_ce;
 static zend_object_handlers uv_stdio_handlers;
@@ -266,92 +230,6 @@ static zend_always_inline php_uv_loop_t *php_uv_default_loop()
 	return UV_G(default_loop);
 }
 
-static php_socket_t php_uv_zval_to_valid_poll_fd(zval *ptr)
-{
-	php_socket_t fd = -1;
-	php_stream *stream;
-
-	/* Validate Checks */
-
-#if !defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
-	php_socket *socket;
-#endif
-	/* TODO: is this correct on windows platform? */
-	if (Z_TYPE_P(ptr) == IS_RESOURCE) {
-		if ((stream = (php_stream *) zend_fetch_resource_ex(ptr, NULL, php_file_le_stream()))) {
-			/* make sure only valid resource streams are passed - plainfiles and most php streams are invalid */
-			if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "PHP") && (!stream->orig_path || (strncmp(stream->orig_path, "php://std", sizeof("php://std") - 1) && strncmp(stream->orig_path, "php://fd", sizeof("php://fd") - 1)))) {
-				php_error_docref(NULL, E_WARNING, "invalid resource passed, this resource is not supported");
-				return -1;
-			}
-
-			/* Some streams (specifically STDIO and encrypted streams) can be cast to FDs */
-			if (php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void*)&fd, 1) == SUCCESS && fd >= 0) {
-				if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "plainfile")) {
-					struct stat stat;
-					fstat(fd, &stat);
-					if (!S_ISFIFO(stat.st_mode))
-					{
-						php_error_docref(NULL, E_WARNING, "invalid resource passed, this plain files are not supported");
-						return -1;
-					}
-				}
-				return fd;
-			}
-
-			fd = -1;
-		} else {
-			php_error_docref(NULL, E_WARNING, "unhandled resource type detected.");
-			fd = -1;
-		}
-	} else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *) ((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std)))) {
-		fd = socket->bsd_socket;
-	}
-
-	return fd;
-}
-
-static php_socket_t php_uv_zval_to_fd(zval *ptr)
-{
-	php_socket_t fd = -1;
-	php_stream *stream;
-#if !defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
-	php_socket *socket;
-#endif
-	/* TODO: is this correct on windows platform? */
-	if (Z_TYPE_P(ptr) == IS_RESOURCE) {
-		if ((stream = (php_stream *) zend_fetch_resource_ex(ptr, NULL, php_file_le_stream()))) {
-			if (php_stream_cast(stream, PHP_STREAM_AS_FD | PHP_STREAM_CAST_INTERNAL, (void *) &fd, 1) != SUCCESS || fd < 0) {
-				fd = -1;
-			}
-#if PHP_VERSION_ID < 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
-		} else if (php_sockets_le_socket_ptr && (socket = (php_socket *) zend_fetch_resource_ex(ptr, NULL, php_sockets_le_socket_ptr()))) {
-			fd = socket->bsd_socket;
-#endif
-		} else {
-			php_error_docref(NULL, E_WARNING, "unhandled resource type detected.");
-			fd = -1;
-		}
-	} else if (Z_TYPE_P(ptr) == IS_LONG) {
-		fd = Z_LVAL_P(ptr);
-		if (fd < 0) {
-			fd = -1;
-		}
-
-		{
-			/* make sure that a valid resource handle was passed - issue #36 */
-			int err = uv_guess_handle((uv_file) fd);
-			if (err == UV_UNKNOWN_HANDLE) {
-				php_error_docref(NULL, E_WARNING, "invalid resource type detected");
-				fd = -1;
-			}
-		}
-	} else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *) ((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std)))) {
-		fd = socket->bsd_socket;
-	}
-
-	return fd;
-}
 
 static zend_always_inline const char* php_uv_strerror(long error_code)
 {
