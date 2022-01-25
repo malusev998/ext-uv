@@ -5,9 +5,7 @@
 #define PHP_UV_EXTNAME "uv"
 #define PHP_UV_VERSION "0.3.0"
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
+#include <config.h>
 
 #ifndef PHP_UV_DTRACE
 	#define PHP_UV_DTRACE 0
