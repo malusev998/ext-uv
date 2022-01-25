@@ -1,40 +1,188 @@
 project('php-uv', 'c', version: '0.3.0')
 
-php_include_dir = run_command('php-config', '--include-dir', check: true).stdout().strip()
+cc = meson.get_compiler('c')
+cc_clang = cc.get_id().contains('clang')
+cc_gnu = cc.get_id().contains('gcc')
 
-message(php_include_dir)
+linux = host_machine.system() == 'linux'
+apple = host_machine.system() == 'darwin'
 
-incdir = include_directories(
-    'include',
-    php_include_dir,
-    php_include_dir + '/main',
-    php_include_dir + '/Zend',
-    php_include_dir + '/TSRM',
-    php_include_dir + '/ext',
+libuv_cargs = [
+    '-D_FILE_OFFSET_BITS=64',
+    '-D_LARGEFILE_SOURCE',
+]
+
+cc_other_cargs_all = [
+  '-fno-strict-aliasing',   # f_strict_aliasing
+]
+
+libuv_deps = [
+  dependency('threads'),
+]
+
+foreach flag : cc_other_cargs_all
+  if cc.has_argument(flag)
+    libuv_cargs += flag
+  endif
+endforeach
+
+libuv_libs = []
+
+libuv_src = [
+    'libuv/src/fs-poll.c',
+    'libuv/src/idna.c',
+    'libuv/src/inet.c',
+    'libuv/src/random.c',
+    'libuv/src/strscpy.c',
+    'libuv/src/threadpool.c',
+    'libuv/src/timer.c',
+    'libuv/src/uv-data-getter-setters.c',
+    'libuv/src/uv-common.c',
+    'libuv/src/version.c',
+]
+
+if apple or linux
+    libuv_src += [
+        'libuv/src/unix/async.c',
+        'libuv/src/unix/core.c',
+        'libuv/src/unix/dl.c',
+        'libuv/src/unix/fs.c',
+        'libuv/src/unix/getaddrinfo.c',
+        'libuv/src/unix/getnameinfo.c',
+        'libuv/src/unix/loop-watcher.c',
+        'libuv/src/unix/loop.c',
+        'libuv/src/unix/pipe.c',
+        'libuv/src/unix/poll.c',
+        'libuv/src/unix/process.c',
+        'libuv/src/unix/random-devurandom.c',
+        'libuv/src/unix/signal.c',
+        'libuv/src/unix/stream.c',
+        'libuv/src/unix/tcp.c',
+        'libuv/src/unix/thread.c',
+        'libuv/src/unix/tty.c',
+        'libuv/src/unix/udp.c',
+        'libuv/src/unix/proctitle.c'
+    ]
+endif
+
+
+if apple
+    libuv_src += [
+        'libuv/src/unix/bsd-ifaddrs.c',
+        'libuv/src/unix/kqueue.c',
+        'libuv/src/unix/random-getentropy.c',
+        'libuv/src/unix/darwin-proctitle.c',
+        'libuv/src/unix/darwin.c',
+        'libuv/src/unix/fsevents.c',
+    ]
+
+    libuv_cargs += [
+        '-D_DARWIN_UNLIMITED_SELECT=1',
+        '-D_DARWIN_USE_64_BIT_INODE=1',
+    ]
+endif
+
+
+if linux
+  libuv_cargs += [
+    '-D_GNU_SOURCE',
+    '-D_POSIX_C_SOURCE=200112',
+  ]
+  libuv_libs += ['dl', 'rt']
+
+  libuv_src += [
+    'libuv/src/unix/linux-core.c',
+    'libuv/src/unix/linux-inotify.c',
+    'libuv/src/unix/linux-syscalls.c',
+    'libuv/src/unix/procfs-exepath.c',
+    'libuv/src/unix/random-getrandom.c',
+    'libuv/src/unix/random-sysctl-linux.c',
+    'libuv/src/unix/epoll.c',
+  ]
+
+endif
+
+foreach lib : libuv_libs
+  libuv_deps += cc.find_library(lib, required: true)
+endforeach
+
+libuv_public_inc = include_directories('libuv/include')
+libuv_private_inc = include_directories('libuv/src')
+libuv_inc = [libuv_public_inc, libuv_private_inc]
+
+libuv = static_library('uv',
+  libuv_src,
+  c_args: libuv_cargs,
+  dependencies: libuv_deps,
+  include_directories: libuv_inc,
 )
 
-LIBUV_LOCKS_SRC = [
-    './src/locks/locks.c',
-    './src/locks/mutex.c',
-    './src/locks/php_lock.c',
-    './src/locks/rwlock.c',
-    './src/locks/semaphore.c',
+libuv_dep = declare_dependency(
+  dependencies: libuv_deps,
+  link_with: libuv,
+  include_directories: libuv_public_inc,
+)
+
+php_include_dir = run_command('php-config', '--include-dir', check: true).stdout().strip()
+php_lib = run_command('php-config', '--ldflags', check: true).stdout().strip()
+
+ldflags = php_lib.split(' ')
+
+
+# public_include_dir = include_directories('include')
+# private_include_idr = include_directories('src')
+
+php_include_dir_all = include_directories(php_include_dir)
+php_include_dir_main = include_directories(php_include_dir + '/main')
+php_include_dir_Zend = include_directories(php_include_dir + '/Zend')
+php_include_dir_TSRM = include_directories(php_include_dir + '/TSRM')
+php_include_dir_ext = include_directories(php_include_dir + '/ext')
+
+incdir = [
+  # public_include_dir,
+  # private_include_idr,
+  libuv_public_inc,
+  php_include_dir_all,
+  php_include_dir_main,
+  php_include_dir_Zend,
+  php_include_dir_TSRM,
+  php_include_dir_ext
 ]
 
-LIBUV_FS_SRC = [
-    './src/parsing.c',
-    './src/register_class.c',
-    './src/fs/fd.c',
-]
+# PRIVATE_HEADER_FILES = [
+#   './src/fs.h',
+#   './src/locks.h',
+# ]
+
+# PUBLIC_HEADER_FILES = [
+#   './include/debug.h',
+#   './include/init.h',
+#   './include/parsing.h',
+#   './include/register.h',
+#   './include/types.h',
+# ]
+
+
+# PHPUV_LOCKS_SRC = [
+#     './src/locks/locks.c',
+#     './src/locks/mutex.c',
+#     './src/locks/php_lock.c',
+#     './src/locks/rwlock.c',
+#     './src/locks/semaphore.c',
+# ]
+
+# PHPUV_FS_SRC = [
+#     './src/parsing.c',
+#     './src/register_class.c',
+#     './src/fs/fd.c',
+# ]
 
 ROOT_SRC = [
     './php_uv.c',
     './uv.c',
 ]
 
-have_libuv = '0'
-
-SOURCES = LIBUV_FS_SRC + LIBUV_LOCKS_SRC + ROOT_SRC
+have_libuv = '1'
 
 conf = configuration_data({
     'HAVE_INTTYPES_H': '1',
@@ -64,4 +212,14 @@ configure_file(
 )
 
 
-library('php_uv', sources: SOURCES, include_directories: incdir, name_prefix: '')
+SOURCES = ROOT_SRC
+
+library('php_uv',
+  sources: SOURCES,
+  include_directories: incdir,
+  name_prefix: '',
+  dependencies: [
+    libuv_dep
+  ],
+  c_args: ldflags
+)

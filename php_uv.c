@@ -22,16 +22,10 @@
 #include "php_uv.h"
 #include "php_main.h"
 #include "ext/standard/info.h"
-
-#include "debug.h"
-#include "parsing.h"
-#include "register.h"
-#include "init.h"
-
-#include "src/locks.h"
+#include "zend_smart_str.h"
 
 #ifndef PHP_UV_DEBUG
-	#define PHP_UV_DEBUG 0
+#define PHP_UV_DEBUG 0
 #endif
 
 #if defined(ZTS) && PHP_VERSION_ID < 80000
@@ -44,10 +38,142 @@
 #define TSRMLS_D void *tsrm_ls
 #define TSRMLS_DC , TSRMLS_D
 
+#ifdef COMPILE_DL_UV
+ZEND_TSRMLS_CACHE_DEFINE()
+#endif
 #endif
 
 ZEND_DECLARE_MODULE_GLOBALS(uv);
 
+#ifndef GC_ADDREF
+	#define GC_ADDREF(ref) ++GC_REFCOUNT(ref)
+#endif
+
+#if PHP_VERSION_ID < 70100
+	#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_paramer_class_error(__VA_ARGS__)
+#elif PHP_VERSION_ID < 70200 || PHP_VERSION_ID >= 70300
+	#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_parameter_class_error(__VA_ARGS__)
+#else
+	#define uv_zend_wrong_parameter_class_error(...) zend_wrong_parameter_class_error(__VA_ARGS__)
+#endif
+
+#if PHP_VERSION_ID < 70200
+	#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0)
+#else
+	#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0, 0)
+#endif
+
+#if PHP_VERSION_ID < 70400
+	#define _error_code error_code
+#endif
+
+#if PHP_VERSION_ID >= 80000
+#define zend_internal_type_error(strict_types, ...) zend_type_error(__VA_ARGS__)
+#endif
+
+#define UV_PARAM_OBJ_EX(dest, type, check_null, ce, ...) \
+	{ \
+		zval *zv; \
+		UV_PARAM_PROLOGUE \
+		if (UNEXPECTED(!uv_parse_arg_object(_arg, &zv, check_null, ce, ##__VA_ARGS__, NULL))) { \
+			if (!(_flags & ZEND_PARSE_PARAMS_QUIET)) { \
+				zend_string *names = php_uv_concat_ce_names(ce, ##__VA_ARGS__, NULL); \
+				uv_zend_wrong_parameter_class_error(_flags & ZEND_PARSE_PARAMS_THROW, _i, ZSTR_VAL(names), _arg); \
+				zend_string_release(names); \
+			} \
+			_error_code = ZPP_ERROR_FAILURE; \
+			break; \
+		} \
+		if (GC_FLAGS(Z_OBJ_P(zv)) & IS_OBJ_DESTRUCTOR_CALLED) { \
+			if (!(_flags & ZEND_PARSE_PARAMS_QUIET)) { \
+				php_error_docref(NULL, E_WARNING, "passed %s handle is already closed", ZSTR_VAL(Z_OBJCE_P(_arg)->name)); \
+			} \
+			_error_code = ZPP_ERROR_FAILURE; \
+			break; \
+		} \
+		dest = zv == NULL ? NULL : (type *) Z_OBJ_P(zv); \
+	}
+
+#define UV_PARAM_OBJ(dest, type, ...) UV_PARAM_OBJ_EX(dest, type, 0, ##__VA_ARGS__, NULL)
+#define UV_PARAM_OBJ_NULL(dest, type, ...) UV_PARAM_OBJ_EX(dest, type, 1, ##__VA_ARGS__, NULL)
+
+static ZEND_COLD zend_string *php_uv_concat_ce_names(zend_class_entry *ce, zend_class_entry *next, ...) {
+	va_list va;
+	smart_str buf = {0};
+
+	va_start(va, next);
+
+	if (!next) {
+		return zend_string_copy(ce->name);
+	}
+
+	goto start;
+	do {
+		if (next) {
+			smart_str_appends(&buf, ", ");
+		} else {
+			smart_str_appends(&buf, " or ");
+		}
+start:
+		smart_str_append(&buf, ce->name);
+		ce = next;
+		next = (zend_class_entry *) va_arg(va, zend_class_entry *);
+	} while (next);
+
+	va_end(va);
+
+	smart_str_0(&buf);
+	return buf.s;
+}
+
+/* gcc complains: sorry, unimplemented: function ‘uv_parse_arg_object’ can never be inlined because it uses variable argument lists */
+#ifdef __clang__
+static zend_always_inline int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
+#else
+static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
+#endif
+	if (EXPECTED(Z_TYPE_P(arg) == IS_OBJECT)) {
+		va_list va;
+		zend_class_entry *argce = Z_OBJCE_P(arg);
+		va_start(va, ce);
+		do {
+			if (instanceof_function(argce, ce)) {
+				*dest = arg;
+				return 1;
+			}
+			ce = (zend_class_entry *) va_arg(va, zend_class_entry *);
+		} while (ce);
+	} else if (check_null && EXPECTED(Z_TYPE_P(arg) == IS_NULL)) {
+		*dest = NULL;
+		return 1;
+	}
+	return 0;
+}
+
+#define PHP_UV_DEINIT_UV(uv) \
+	clean_uv_handle(uv); \
+	OBJ_RELEASE(&uv->std);
+
+#define PHP_UV_INIT_GENERIC(dest, type, ce) \
+	do { \
+		zval zv; \
+		object_init_ex(&zv, ce); \
+		dest = (type *) Z_OBJ(zv); \
+	} while (0)
+
+#define PHP_UV_INIT_UV(uv, ce) PHP_UV_INIT_GENERIC(uv, php_uv_t, ce)
+
+#define PHP_UV_INIT_UV_EX(_uv, ce, cb, ...) \
+	do { \
+		int r; \
+		PHP_UV_INIT_UV(_uv, ce); \
+		r = cb(&loop->loop, (void *) &_uv->uv.handle, ##__VA_ARGS__); \
+		if (r) { \
+			PHP_UV_DEINIT_UV(_uv); \
+			php_error_docref(NULL, E_WARNING, #cb " failed"); \
+			RETURN_FALSE; \
+		} \
+	} while (0)
 
 #define PHP_UV_INIT_CONNECT(req, uv) \
 	req = (uv_connect_t *) emalloc(sizeof(uv_connect_t)); \
@@ -69,6 +195,9 @@ ZEND_DECLARE_MODULE_GLOBALS(uv);
 		loop = php_uv_default_loop(); \
 	}  \
 
+#define PHP_UV_INIT_LOCK(lock, lock_type) \
+	PHP_UV_INIT_GENERIC(lock, php_uv_lock_t, uv_lock_ce); \
+	lock->type = lock_type;
 
 #define PHP_UV_CHECK_VALID_FD(fd, zstream) \
 	if (fd < 0) { \
@@ -100,8 +229,21 @@ ZEND_DECLARE_MODULE_GLOBALS(uv);
 		return; \
 	}
 
+#define PHP_UV_INIT_ZVALS(uv) \
+	{ \
+		int ix = 0;\
+		for (ix = 0; ix < PHP_UV_CB_MAX; ix++) {\
+			uv->callback[ix] = NULL;\
+		} \
+		ZVAL_UNDEF(&uv->fs_fd); \
+		ZVAL_UNDEF(&uv->fs_fd_alt); \
+	}
 
-#define PHP_UV_SKIP_DTOR(uv) do { GC_ADD_FLAGS(&uv->std, IS_OBJ_DESTRUCTOR_CALLED); } while (0)
+#if PHP_VERSION_ID < 70300
+ #define PHP_UV_SKIP_DTOR(uv) do { GC_FLAGS(&uv->std) |= IS_OBJ_DESTRUCTOR_CALLED; } while (0)
+#else
+ #define PHP_UV_SKIP_DTOR(uv) do { GC_ADD_FLAGS(&uv->std, IS_OBJ_DESTRUCTOR_CALLED); } while (0)
+#endif
 #define PHP_UV_IS_DTORED(uv) (GC_FLAGS(&uv->std) & IS_OBJ_DESTRUCTOR_CALLED)
 
 #define PHP_UV_SOCKADDR_IPV4_INIT(sockaddr) PHP_UV_INIT_GENERIC(sockaddr, php_uv_sockaddr_t, uv_sockaddr_ipv4_ce);
@@ -116,17 +258,58 @@ ZEND_DECLARE_MODULE_GLOBALS(uv);
 #define PHP_UV_SOCKADDR_IPV6(sockaddr) sockaddr->addr.ipv6
 #define PHP_UV_SOCKADDR_IPV6_P(sockaddr) &sockaddr->addr.ipv6
 
-#define PHP_UV_FD_TO_ZVAL(zv, fd) { \
-	php_stream *_stream = php_stream_fopen_from_fd(fd, "w+", NULL); \
-	zval *_z = (zv); php_stream_to_zval(_stream, _z); \
-}
+#define PHP_UV_LOCK_RWLOCK_P(_lock) &_lock->lock.rwlock
+#define PHP_UV_LOCK_MUTEX_P(_lock) &_lock->lock.mutex
+#define PHP_UV_LOCK_SEM_P(_lock) &_lock->lock.semaphore
 
-__attribute__((weak)) zend_class_entry* socket_ce = NULL;
+#define PHP_UV_FD_TO_ZVAL(zv, fd) { php_stream *_stream = php_stream_fopen_from_fd(fd, "w+", NULL); zval *_z = (zv); php_stream_to_zval(_stream, _z); }
+
+#if PHP_UV_DEBUG>=1
+#define PHP_UV_DEBUG_PRINT(format, ...) fprintf(stderr, format, ## __VA_ARGS__)
+#else
+#define PHP_UV_DEBUG_PRINT(format, ...)
+#endif
+
+#if PHP_UV_DEBUG>=1
+#define PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(handler, uv) \
+	{ \
+		PHP_UV_DEBUG_PRINT("# %s add(%p - %s): %u->%u\n", #handler, uv, ZSTR_VAL(uv->std.ce->name), GC_REFCOUNT(&(uv)->std) - 1, GC_REFCOUNT(&(uv)->std)); \
+	}
+#define PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(handler, uv) \
+	{ \
+		PHP_UV_DEBUG_PRINT("# %s del(%p - %s): %u->%u\n", #handler, uv, ZSTR_VAL(uv->std.ce->name), GC_REFCOUNT(&(uv)->std), GC_REFCOUNT(&(uv)->std) - 1); \
+	}
+#else
+#define PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(hander, uv)
+#define PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(hander, uv)
+#endif
+
+#if defined(ZTS) && PHP_VERSION_ID < 80000
+#define UV_FETCH_ALL(ls, id, type) ((type) (*((void ***) ls))[TSRM_UNSHUFFLE_RSRC_ID(id)])
+#define UV_FETCH_CTX(ls, id, type, element) (((type) (*((void ***) ls))[TSRM_UNSHUFFLE_RSRC_ID(id)])->element)
+#define UV_CG(ls, v)  UV_FETCH_CTX(ls, compiler_globals_id, zend_compiler_globals*, v)
+#define UV_CG_ALL(ls) UV_FETCH_ALL(ls, compiler_globals_id, zend_compiler_globals*)
+#define UV_EG(ls, v)  UV_FETCH_CTX(ls, executor_globals_id, zend_executor_globals*, v)
+#define UV_SG(ls, v)  UV_FETCH_CTX(ls, sapi_globals_id, sapi_globals_struct*, v)
+#define UV_EG_ALL(ls) UV_FETCH_ALL(ls, executor_globals_id, zend_executor_globals*)
+#endif
+
+#if !defined(PHP_WIN32) && !(defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
+# if PHP_VERSION_ID >= 80000
+__attribute__((weak)) zend_class_entry *socket_ce = NULL;
+# else
+int (*php_sockets_le_socket_ptr)(void) = NULL;
+int php_sockets_le_socket(void) __attribute__((weak));
+# endif
+#endif
 
 /* objects */
 extern void php_uv_init(zend_class_entry *uv_ce);
 
 static zend_object_handlers uv_default_handlers;
+
+static zend_class_entry *uv_ce;
+static zend_object_handlers uv_handlers;
 
 static zend_class_entry *uv_stream_ce;
 
@@ -155,6 +338,9 @@ static zend_class_entry *uv_sockaddr_ce;
 
 static zend_class_entry *uv_sockaddr_ipv4_ce;
 static zend_class_entry *uv_sockaddr_ipv6_ce;
+
+static zend_class_entry *uv_lock_ce;
+static zend_object_handlers uv_lock_handlers;
 
 static zend_class_entry *uv_stdio_ce;
 static zend_object_handlers uv_stdio_handlers;
@@ -195,6 +381,7 @@ static void php_uv_fs_cb(uv_fs_t* req);
 static int php_uv_do_callback(zval *retval_ptr, php_uv_cb_t *callback, zval *params, int param_count TSRMLS_DC);
 
 void static destruct_uv(zend_object *obj);
+void static clean_uv_handle(php_uv_t *uv);
 
 static void php_uv_tcp_connect_cb(uv_connect_t *conn_req, int status);
 
@@ -218,8 +405,8 @@ static void php_uv_idle_cb(uv_timer_t *handle);
 
 static void php_uv_signal_cb(uv_signal_t *handle, int sig_num);
 
-// TODO: Remove
-static zend_always_inline php_uv_loop_t *php_uv_default_loop()
+
+static php_uv_loop_t *php_uv_default_loop()
 {
 	if (UV_G(default_loop) == NULL) {
 		zval zv;
@@ -230,8 +417,104 @@ static zend_always_inline php_uv_loop_t *php_uv_default_loop()
 	return UV_G(default_loop);
 }
 
+static php_socket_t php_uv_zval_to_valid_poll_fd(zval *ptr)
+{
+	php_socket_t fd = -1;
+	php_stream *stream;
 
-static zend_always_inline const char* php_uv_strerror(long error_code)
+	/* Validate Checks */
+
+#if !defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
+	php_socket *socket;
+#endif
+	/* TODO: is this correct on windows platform? */
+	if (Z_TYPE_P(ptr) == IS_RESOURCE) {
+		if ((stream = (php_stream *) zend_fetch_resource_ex(ptr, NULL, php_file_le_stream()))) {
+			/* make sure only valid resource streams are passed - plainfiles and most php streams are invalid */
+			if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "PHP") && (!stream->orig_path || (strncmp(stream->orig_path, "php://std", sizeof("php://std") - 1) && strncmp(stream->orig_path, "php://fd", sizeof("php://fd") - 1)))) {
+				php_error_docref(NULL, E_WARNING, "invalid resource passed, this resource is not supported");
+				return -1;
+			}
+
+			/* Some streams (specifically STDIO and encrypted streams) can be cast to FDs */
+			if (php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void*)&fd, 1) == SUCCESS && fd >= 0) {
+				if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "plainfile")) {
+#ifndef PHP_WIN32
+					struct stat stat;
+					fstat(fd, &stat);
+					if (!S_ISFIFO(stat.st_mode))
+#endif
+					{
+						php_error_docref(NULL, E_WARNING, "invalid resource passed, this plain files are not supported");
+						return -1;
+					}
+				}
+				return fd;
+			}
+
+			fd = -1;
+#if PHP_VERSION_ID < 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
+		} else if (php_sockets_le_socket_ptr && (socket = (php_socket *) zend_fetch_resource_ex(ptr, NULL, php_sockets_le_socket_ptr()))) {
+			fd = socket->bsd_socket;
+#endif
+		} else {
+			php_error_docref(NULL, E_WARNING, "unhandled resource type detected.");
+			fd = -1;
+		}
+#if PHP_VERSION_ID >= 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
+	} else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *) ((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std)))) {
+		fd = socket->bsd_socket;
+#endif
+	}
+
+	return fd;
+}
+
+static php_socket_t php_uv_zval_to_fd(zval *ptr)
+{
+	php_socket_t fd = -1;
+	php_stream *stream;
+#if !defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
+	php_socket *socket;
+#endif
+	/* TODO: is this correct on windows platform? */
+	if (Z_TYPE_P(ptr) == IS_RESOURCE) {
+		if ((stream = (php_stream *) zend_fetch_resource_ex(ptr, NULL, php_file_le_stream()))) {
+			if (php_stream_cast(stream, PHP_STREAM_AS_FD | PHP_STREAM_CAST_INTERNAL, (void *) &fd, 1) != SUCCESS || fd < 0) {
+				fd = -1;
+			}
+#if PHP_VERSION_ID < 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
+		} else if (php_sockets_le_socket_ptr && (socket = (php_socket *) zend_fetch_resource_ex(ptr, NULL, php_sockets_le_socket_ptr()))) {
+			fd = socket->bsd_socket;
+#endif
+		} else {
+			php_error_docref(NULL, E_WARNING, "unhandled resource type detected.");
+			fd = -1;
+		}
+	} else if (Z_TYPE_P(ptr) == IS_LONG) {
+		fd = Z_LVAL_P(ptr);
+		if (fd < 0) {
+			fd = -1;
+		}
+
+		{
+			/* make sure that a valid resource handle was passed - issue #36 */
+			int err = uv_guess_handle((uv_file) fd);
+			if (err == UV_UNKNOWN_HANDLE) {
+				php_error_docref(NULL, E_WARNING, "invalid resource type detected");
+				fd = -1;
+			}
+		}
+#if PHP_VERSION_ID >= 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
+	} else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *) ((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std)))) {
+		fd = socket->bsd_socket;
+#endif
+	}
+
+	return fd;
+}
+
+static const char* php_uv_strerror(long error_code)
 {
 	/* Note: uv_strerror doesn't use assert. we don't need check value here */
 	return uv_strerror(error_code);
@@ -283,6 +566,218 @@ static void php_uv_cb_init(php_uv_cb_t **result, php_uv_t *uv, zend_fcall_info *
 	uv->callback[type] = cb;
 }
 
+static void php_uv_lock_init(enum php_uv_lock_type lock_type, INTERNAL_FUNCTION_PARAMETERS)
+{
+	php_uv_lock_t *lock = NULL;
+	int error = 0;
+
+	switch (lock_type) {
+		case IS_UV_RWLOCK:
+		case IS_UV_RWLOCK_WR:
+		case IS_UV_RWLOCK_RD:
+		{
+			PHP_UV_INIT_LOCK(lock, IS_UV_RWLOCK);
+			error = uv_rwlock_init(PHP_UV_LOCK_RWLOCK_P(lock));
+		}
+		break;
+		case IS_UV_MUTEX:
+		{
+			PHP_UV_INIT_LOCK(lock, IS_UV_MUTEX);
+			error = uv_mutex_init(PHP_UV_LOCK_MUTEX_P(lock));
+		}
+		break;
+		case IS_UV_SEMAPHORE:
+		{
+			zend_long val = 0;
+
+			if (zend_parse_parameters(ZEND_NUM_ARGS(),
+				"l", &val) == FAILURE) {
+				return;
+			}
+
+			PHP_UV_INIT_LOCK(lock, IS_UV_SEMAPHORE);
+			error = uv_sem_init(PHP_UV_LOCK_SEM_P(lock), (int) val);
+		}
+		break;
+		default:
+			php_error_docref(NULL, E_ERROR, "unexpected type");
+		break;
+	}
+
+	if (error == 0) {
+		RETURN_OBJ(&lock->std);
+	} else {
+		OBJ_RELEASE(&lock->std);
+		RETURN_FALSE;
+	}
+}
+
+static void php_uv_lock_lock(enum php_uv_lock_type lock_type, INTERNAL_FUNCTION_PARAMETERS)
+{
+	php_uv_lock_t *lock;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		UV_PARAM_OBJ(lock, php_uv_lock_t, uv_lock_ce)
+	ZEND_PARSE_PARAMETERS_END();
+
+	switch (lock_type) {
+		case IS_UV_RWLOCK:
+		case IS_UV_RWLOCK_RD:
+		{
+			if (lock->locked == 0x01) {
+				zend_error(E_WARNING, "Cannot acquire a read lock while holding a write lock");
+				RETURN_FALSE;
+			}
+
+			uv_rwlock_rdlock(PHP_UV_LOCK_RWLOCK_P(lock));
+			if (!lock->locked++) {
+				lock->locked = 0x02;
+			}
+		}
+		break;
+		case IS_UV_RWLOCK_WR:
+		{
+			if (lock->locked) {
+				zend_error(E_WARNING, "Cannot acquire a write lock when already holding a lock");
+				RETURN_FALSE;
+			}
+
+			uv_rwlock_wrlock(PHP_UV_LOCK_RWLOCK_P(lock));
+			lock->locked = 0x01;
+		}
+		break;
+		case IS_UV_MUTEX:
+		{
+			uv_mutex_lock(PHP_UV_LOCK_MUTEX_P(lock));
+			lock->locked = 0x01;
+		}
+		break;
+		case IS_UV_SEMAPHORE:
+		{
+			uv_sem_post(PHP_UV_LOCK_SEM_P(lock));
+		}
+		break;
+		default:
+			php_error_docref(NULL, E_ERROR, "unexpected type");
+		break;
+	}
+}
+
+static void php_uv_lock_unlock(enum php_uv_lock_type  lock_type, INTERNAL_FUNCTION_PARAMETERS)
+{
+	php_uv_lock_t *lock;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		UV_PARAM_OBJ(lock, php_uv_lock_t, uv_lock_ce)
+	ZEND_PARSE_PARAMETERS_END();
+
+	switch (lock_type) {
+		case IS_UV_RWLOCK:
+		case IS_UV_RWLOCK_RD:
+		{
+			if (lock->locked > 0x01) {
+				uv_rwlock_rdunlock(PHP_UV_LOCK_RWLOCK_P(lock));
+				if (--lock->locked == 0x01) {
+					lock->locked = 0x00;
+				}
+			}
+		}
+		break;
+		case IS_UV_RWLOCK_WR:
+		{
+			if (lock->locked == 0x01) {
+				uv_rwlock_wrunlock(PHP_UV_LOCK_RWLOCK_P(lock));
+				lock->locked = 0x00;
+			}
+		}
+		break;
+		case IS_UV_MUTEX:
+		{
+			if (lock->locked == 0x01) {
+				uv_mutex_unlock(PHP_UV_LOCK_MUTEX_P(lock));
+				lock->locked = 0x00;
+			}
+		}
+		break;
+		case IS_UV_SEMAPHORE:
+		{
+			uv_sem_wait(PHP_UV_LOCK_SEM_P(lock));
+		}
+		break;
+		default:
+			php_error_docref(NULL, E_ERROR, "unexpected type");
+		break;
+	}
+}
+
+static void php_uv_lock_trylock(enum php_uv_lock_type lock_type, INTERNAL_FUNCTION_PARAMETERS)
+{
+	php_uv_lock_t *lock;
+	int error = 0;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		UV_PARAM_OBJ(lock, php_uv_lock_t, uv_lock_ce)
+	ZEND_PARSE_PARAMETERS_END();
+
+	switch(lock_type) {
+		case IS_UV_RWLOCK:
+		case IS_UV_RWLOCK_RD:
+		{
+			if (lock->locked == 0x01) {
+				zend_error(E_WARNING, "Cannot acquire a read lock while holding a write lock");
+				RETURN_FALSE;
+			}
+
+			error = uv_rwlock_tryrdlock(PHP_UV_LOCK_RWLOCK_P(lock));
+			if (error == 0) {
+				if (!lock->locked++) {
+					lock->locked = 0x02;
+				}
+				RETURN_TRUE;
+			} else {
+				RETURN_FALSE;
+			}
+		}
+		break;
+		case IS_UV_RWLOCK_WR:
+		{
+			if (lock->locked) {
+				zend_error(E_WARNING, "Cannot acquire a write lock when already holding a lock");
+				RETURN_FALSE;
+			}
+
+			error = uv_rwlock_trywrlock(PHP_UV_LOCK_RWLOCK_P(lock));
+			if (error == 0) {
+				lock->locked = 0x01;
+				RETURN_TRUE;
+			} else {
+				RETURN_FALSE;
+			}
+		}
+		break;
+		case IS_UV_MUTEX:
+		{
+			error = uv_mutex_trylock(PHP_UV_LOCK_MUTEX_P(lock));
+
+			if (error == 0) {
+				lock->locked = 0x01;
+				RETURN_TRUE;
+			} else {
+				RETURN_FALSE;
+			}
+		}
+		break;
+		case IS_UV_SEMAPHORE:
+		{
+			error = uv_sem_trywait(PHP_UV_LOCK_SEM_P(lock));
+			RETURN_LONG(error);
+		}
+		default:
+			php_error_docref(NULL, E_ERROR, "unexpected type");
+		break;
+	}
+}
+
 
 static void php_uv_fs_common(uv_fs_type fs_type, INTERNAL_FUNCTION_PARAMETERS)
 {
@@ -303,7 +798,7 @@ static void php_uv_fs_common(uv_fs_type fs_type, INTERNAL_FUNCTION_PARAMETERS)
 		Z_PARAM_FUNC_EX(fci, fcc, 1, 0) \
 	ZEND_PARSE_PARAMETERS_END()
 
-#define PHP_UV_FS_PARSE_PARAMETERS(num, params) PHP_UV_FS_PARSE_PARAMETERS_EX(num, params, 0)	
+#define PHP_UV_FS_PARSE_PARAMETERS(num, params) PHP_UV_FS_PARSE_PARAMETERS_EX(num, params, 0)
 
 #define PHP_UV_FS_SETUP() \
 	PHP_UV_INIT_UV(uv, uv_fs_ce); \
@@ -706,9 +1201,37 @@ static inline zend_bool php_uv_closeable_type(php_uv_t *uv) {
 
 /* destructor */
 
+void static destruct_uv_lock(zend_object *obj)
+{
+	php_uv_lock_t *lock = (php_uv_lock_t *) obj;
 
+	if (lock->type == IS_UV_RWLOCK) {
+		if (lock->locked == 0x01) {
+			php_error_docref(NULL, E_NOTICE, "uv_rwlock: still locked resource detected; forcing wrunlock");
+			uv_rwlock_wrunlock(PHP_UV_LOCK_RWLOCK_P(lock));
+		} else if (lock->locked) {
+			php_error_docref(NULL, E_NOTICE, "uv_rwlock: still locked resource detected; forcing rdunlock");
+			while (--lock->locked > 0) {
+				uv_rwlock_rdunlock(PHP_UV_LOCK_RWLOCK_P(lock));
+			}
+		}
+		uv_rwlock_destroy(PHP_UV_LOCK_RWLOCK_P(lock));
+	} else if (lock->type == IS_UV_MUTEX) {
+		if (lock->locked == 0x01) {
+			php_error_docref(NULL, E_NOTICE, "uv_mutex: still locked resource detected; forcing unlock");
+			uv_mutex_unlock(PHP_UV_LOCK_MUTEX_P(lock));
+		}
+		uv_mutex_destroy(PHP_UV_LOCK_MUTEX_P(lock));
+	} else if (lock->type == IS_UV_SEMAPHORE) {
+		if (lock->locked == 0x01) {
+			php_error_docref(NULL, E_NOTICE, "uv_sem: still locked resource detected; forcing unlock");
+			uv_sem_post(PHP_UV_LOCK_SEM_P(lock));
+		}
+		uv_sem_destroy(PHP_UV_LOCK_SEM_P(lock));
+	}
+}
 
-static void destruct_uv_loop_walk_cb(uv_handle_t* handle, void* arg) 
+static void destruct_uv_loop_walk_cb(uv_handle_t* handle, void* arg)
 {
 	php_uv_t *uv = (php_uv_t *) handle->data;
 	if (!PHP_UV_IS_DTORED(uv)) { // otherwise we're already closing
@@ -741,7 +1264,7 @@ void static free_uv_loop(zend_object *obj)
 	}
 }
 
-void clean_uv_handle(php_uv_t *uv) {
+void static clean_uv_handle(php_uv_t *uv) {
 	int i;
 
 	/* for now */
@@ -1973,18 +2496,31 @@ static zend_function_entry php_uv_empty_methods[] = {
 	{0}
 };
 
+#if PHP_VERSION_ID >= 80000
 int php_uv_cast_object(zend_object *readobj, zval *writeobj, int type) {
+#else
+int php_uv_cast_object(zval *readobj_zv, zval *writeobj, int type) {
+	zend_object *readobj = Z_OBJ_P(readobj_zv);
+#endif
 	if (type == IS_LONG) {
 		ZVAL_LONG(writeobj, readobj->handle);
 		return SUCCESS;
-	} 
-	
-	return zend_std_cast_object_tostring(readobj, writeobj, type);
+	} else {
+#if PHP_VERSION_ID >= 80000
+		return zend_std_cast_object_tostring(readobj, writeobj, type);
+#else
+		return zend_std_cast_object_tostring(readobj_zv, writeobj, type);
+#endif
+	}
 }
 
-
+#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_get_debug_info(zend_object *object, int *is_temp) {
 	php_uv_t *uv = (php_uv_t *) object;
+#else
+static HashTable *php_uv_get_debug_info(zval *object, int *is_temp) {
+	php_uv_t *uv = (php_uv_t *) Z_OBJ_P(object);
+#endif
 	HashTable *ht = zend_std_get_debug_info(object, is_temp);
 	if (uv->std.ce == uv_poll_ce) {
 		if (!*is_temp) {
@@ -2001,8 +2537,13 @@ static HashTable *php_uv_get_debug_info(zend_object *object, int *is_temp) {
 	return ht;
 }
 
+#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_get_gc(zend_object *object, zval **table, int *n) {
 	php_uv_t *uv = (php_uv_t *) object;
+#else
+static HashTable *php_uv_get_gc(zval *object, zval **table, int *n) {
+	php_uv_t *uv = (php_uv_t *) Z_OBJ_P(object);
+#endif
 	int i;
 
 	if (PHP_UV_IS_DTORED(uv)) {
@@ -2070,20 +2611,38 @@ static HashTable *php_uv_loop_get_gc(zval *object, zval **table, int *n) {
 	return loop->std.properties;
 }
 
+#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_stdio_get_gc(zend_object *object, zval **table, int *n) {
 	php_uv_stdio_t *stdio = (php_uv_stdio_t *) object;
+#else
+static HashTable *php_uv_stdio_get_gc(zval *object, zval **table, int *n) {
+	php_uv_stdio_t *stdio = (php_uv_stdio_t *) Z_OBJ_P(object);
+#endif
+
 	*n = 1;
 	*table = &stdio->stream;
 
 	return stdio->std.properties;
 }
 
+static zend_object *php_uv_create_uv(zend_class_entry *ce) {
+	php_uv_t *uv = emalloc(sizeof(php_uv_t));
+	zend_object_std_init(&uv->std, ce);
+	uv->std.handlers = &uv_handlers;
+
+	PHP_UV_INIT_ZVALS(uv);
+	TSRMLS_SET_CTX(uv->thread_ctx);
+
+	uv->uv.handle.data = uv;
+
+	return &uv->std;
+}
 
 static zend_object *php_uv_create_uv_loop(zend_class_entry *ce) {
 	php_uv_loop_t *loop = emalloc(sizeof(php_uv_loop_t));
 	zend_object_std_init(&loop->std, ce);
 	loop->std.handlers = &uv_loop_handlers;
-	
+
 	uv_loop_init(&loop->loop);
 
 	loop->gc_buffer_size = 0;
@@ -2100,6 +2659,15 @@ static zend_object *php_uv_create_uv_sockaddr(zend_class_entry *ce) {
 	return &sockaddr->std;
 }
 
+static zend_object *php_uv_create_uv_lock(zend_class_entry *ce) {
+	php_uv_lock_t *lock = emalloc(sizeof(php_uv_lock_t));
+	zend_object_std_init(&lock->std, ce);
+	lock->std.handlers = &uv_lock_handlers;
+
+	lock->locked = 0;
+
+	return &lock->std;
+}
 
 static zend_object *php_uv_create_uv_stdio(zend_class_entry *ce) {
 	php_uv_stdio_t *stdio = emalloc(sizeof(php_uv_stdio_t));
@@ -2112,6 +2680,28 @@ static zend_object *php_uv_create_uv_stdio(zend_class_entry *ce) {
 	return &stdio->std;
 }
 
+static zend_class_entry *php_uv_register_internal_class_ex(const char *name, zend_class_entry *parent) {
+	zend_class_entry ce = {0}, *new;
+
+	ce.name = zend_new_interned_string(zend_string_init(name, strlen(name), 1));
+	ce.info.internal.builtin_functions = php_uv_empty_methods;
+	new = zend_register_internal_class_ex(&ce, parent);
+#if PHP_VERSION_ID < 80100
+	new->serialize = zend_class_serialize_deny;
+	new->unserialize = zend_class_unserialize_deny;
+#endif
+	new->ce_flags |= ZEND_ACC_FINAL;
+#if PHP_VERSION_ID >= 80100
+	new->ce_flags |= ZEND_ACC_NOT_SERIALIZABLE ;
+#endif
+	new->create_object = php_uv_create_uv;
+
+	return new;
+}
+
+static zend_class_entry *php_uv_register_internal_class(const char *name) {
+	return php_uv_register_internal_class_ex(name, NULL);
+}
 
 static zend_function *php_uv_get_ctor(zend_object *object) {
 	zend_throw_error(NULL, "The UV classes cannot be instantiated manually");
@@ -2122,7 +2712,11 @@ PHP_MINIT_FUNCTION(uv)
 {
 	PHP_UV_PROBE(MINIT);
 
+#if PHP_VERSION_ID >= 70300
 	memcpy(&uv_default_handlers, &std_object_handlers, sizeof(zend_object_handlers));
+#else
+	memcpy(&uv_default_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
+#endif
 	uv_default_handlers.clone_obj = NULL;
 	uv_default_handlers.get_constructor = php_uv_get_ctor;
 	uv_default_handlers.cast_object = php_uv_cast_object;
@@ -2177,7 +2771,11 @@ PHP_MINIT_FUNCTION(uv)
 	uv_sockaddr_ipv6_ce = php_uv_register_internal_class_ex("UVSockAddrIPv6", uv_sockaddr_ce);
 	uv_sockaddr_ipv6_ce->create_object = php_uv_create_uv_sockaddr;
 
-	php_uv_create_uv_lock_class(uv_default_handlers);
+	uv_lock_ce = php_uv_register_internal_class("UVLock");
+	uv_lock_ce->create_object = php_uv_create_uv_lock;
+	memcpy(&uv_lock_handlers, &uv_default_handlers, sizeof(zend_object_handlers));
+	uv_lock_handlers.dtor_obj = destruct_uv_lock;
+
 	uv_stdio_ce = php_uv_register_internal_class("UVStdio");
 	uv_stdio_ce->create_object = php_uv_create_uv_stdio;
 	memcpy(&uv_stdio_handlers, &uv_default_handlers, sizeof(zend_object_handlers));
@@ -2537,7 +3135,7 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_spawn, 0, 0, 7)
 	ZEND_ARG_INFO(0, env)
 	ZEND_ARG_INFO(0, callback)
 	ZEND_ARG_INFO(0, flags)
-	ZEND_ARG_INFO(0, options)	
+	ZEND_ARG_INFO(0, options)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_kill, 0, 0, 2)
@@ -4749,6 +5347,142 @@ PHP_FUNCTION(uv_chdir)
 }
 /* }}} */
 
+
+/* {{{ proto UVLock uv_rwlock_init(void)
+*/
+PHP_FUNCTION(uv_rwlock_init)
+{
+	php_uv_lock_init(IS_UV_RWLOCK, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto null|false uv_rwlock_rdlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_rdlock)
+{
+	php_uv_lock_lock(IS_UV_RWLOCK_RD, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto bool uv_rwlock_tryrdlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_tryrdlock)
+{
+	php_uv_lock_trylock(IS_UV_RWLOCK_RD, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto void uv_rwlock_rdunlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_rdunlock)
+{
+	php_uv_lock_unlock(IS_UV_RWLOCK_RD, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto null|false uv_rwlock_wrlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_wrlock)
+{
+	php_uv_lock_lock(IS_UV_RWLOCK_WR, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto bool uv_rwlock_trywrlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_trywrlock)
+{
+	php_uv_lock_trylock(IS_UV_RWLOCK_WR, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto void uv_rwlock_wrunlock(UVLock $handle)
+*/
+PHP_FUNCTION(uv_rwlock_wrunlock)
+{
+	php_uv_lock_unlock(IS_UV_RWLOCK_WR, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto UVLock uv_mutex_init(void)
+*/
+PHP_FUNCTION(uv_mutex_init)
+{
+	php_uv_lock_init(IS_UV_MUTEX, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto void uv_mutex_lock(UVLock $lock)
+*/
+PHP_FUNCTION(uv_mutex_lock)
+{
+	php_uv_lock_lock(IS_UV_MUTEX, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto bool uv_mutex_trylock(UVLock $lock)
+*/
+PHP_FUNCTION(uv_mutex_trylock)
+{
+	php_uv_lock_trylock(IS_UV_MUTEX, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ void uv_mutex_unlock(UVLock $lock)
+
+##### *Description*
+
+unlock mutex
+
+##### *Parameters*
+
+*UVLock $lock*: uv resource handle (uv mutex)
+
+##### *Return Value*
+
+*void *:
+
+##### *Example*
+
+*/
+PHP_FUNCTION(uv_mutex_unlock)
+{
+	php_uv_lock_unlock(IS_UV_MUTEX, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto UVLock uv_sem_init(long $value)
+*/
+PHP_FUNCTION(uv_sem_init)
+{
+	php_uv_lock_init(IS_UV_SEMAPHORE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto void uv_sem_post(UVLock $sem)
+*/
+PHP_FUNCTION(uv_sem_post)
+{
+	php_uv_lock_lock(IS_UV_SEMAPHORE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto void uv_sem_wait(UVLock $sem)
+*/
+PHP_FUNCTION(uv_sem_wait)
+{
+	php_uv_lock_unlock(IS_UV_SEMAPHORE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
+/* {{{ proto long uv_sem_trywait(UVLock $sem)
+*/
+PHP_FUNCTION(uv_sem_trywait)
+{
+	php_uv_lock_trylock(IS_UV_SEMAPHORE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
+}
+/* }}} */
+
 /* {{{ proto UVPrepare uv_prepare_init(UVLoop $loop)
 */
 PHP_FUNCTION(uv_prepare_init)
@@ -5117,7 +5851,7 @@ PHP_FUNCTION(uv_fs_fchown)
 	php_uv_fs_common(UV_FS_FCHOWN, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-	
+
 /* {{{ proto void uv_fs_link(UVLoop $loop, string $from, string $to[, callable(long $result) $callback])
 */
 PHP_FUNCTION(uv_fs_link)
@@ -5543,6 +6277,8 @@ PHP_FUNCTION(uv_fs_poll_stop)
 /* }}} */
 
 
+
+
 static zend_function_entry uv_functions[] = {
 	/* general */
 	PHP_FE(uv_update_time,              arginfo_uv_update_time)
@@ -5736,6 +6472,9 @@ PHP_MINFO_FUNCTION(uv)
 
 static PHP_GINIT_FUNCTION(uv)
 {
+#if defined(COMPILE_DL_UV) && defined(ZTS)
+	ZEND_TSRMLS_CACHE_UPDATE();
+#endif
 	uv_globals->default_loop = NULL;
 }
 

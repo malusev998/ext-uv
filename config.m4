@@ -38,20 +38,7 @@ if test "$PHP_DTRACE" != "no"; then
 fi
 
 if test $PHP_UV != "no"; then
-    LOCKS="\
-        src/locks/locks.c \
-        src/locks/mutex.c \
-        src/locks/php_lock.c \
-        src/locks/rwlock.c \
-        src/locks/semaphore.c \
-    "
-
-    SOURCES="\
-        src/parsing.c \
-        src/register_class.c \
-    "
-
-    PHP_NEW_EXTENSION(uv, php_uv.c uv.c $SOURCES $LOCKS, $ext_shared)
+    PHP_NEW_EXTENSION(uv, php_uv.c uv.c, $ext_shared)
 
     PHP_ADD_EXTENSION_DEP(uv, sockets, true)
 
