@@ -1,4 +1,10 @@
-project('php-uv', 'c', version: '0.3.0')
+project('php-uv', 'c', version: '0.3.0', default_options: [
+  'b_lundef=false',
+  'b_colorout=always',
+  'b_pie=true',
+  'c_std=c17',
+  'cpp_std=c++20'
+])
 
 cc = meson.get_compiler('c')
 cc_clang = cc.get_id().contains('clang')
@@ -124,13 +130,9 @@ libuv_dep = declare_dependency(
 )
 
 php_include_dir = run_command('php-config', '--include-dir', check: true).stdout().strip()
-php_lib = run_command('php-config', '--ldflags', check: true).stdout().strip()
+# php_lib = run_command('php-config', '--ldflags', check: true).stdout().strip()
 
-ldflags = php_lib.split(' ')
-
-
-# public_include_dir = include_directories('include')
-# private_include_idr = include_directories('src')
+# ldflags = php_lib.split(' ')
 
 php_include_dir_all = include_directories(php_include_dir)
 php_include_dir_main = include_directories(php_include_dir + '/main')
@@ -139,8 +141,6 @@ php_include_dir_TSRM = include_directories(php_include_dir + '/TSRM')
 php_include_dir_ext = include_directories(php_include_dir + '/ext')
 
 incdir = [
-  # public_include_dir,
-  # private_include_idr,
   libuv_public_inc,
   php_include_dir_all,
   php_include_dir_main,
@@ -149,33 +149,6 @@ incdir = [
   php_include_dir_ext
 ]
 
-# PRIVATE_HEADER_FILES = [
-#   './src/fs.h',
-#   './src/locks.h',
-# ]
-
-# PUBLIC_HEADER_FILES = [
-#   './include/debug.h',
-#   './include/init.h',
-#   './include/parsing.h',
-#   './include/register.h',
-#   './include/types.h',
-# ]
-
-
-# PHPUV_LOCKS_SRC = [
-#     './src/locks/locks.c',
-#     './src/locks/mutex.c',
-#     './src/locks/php_lock.c',
-#     './src/locks/rwlock.c',
-#     './src/locks/semaphore.c',
-# ]
-
-# PHPUV_FS_SRC = [
-#     './src/parsing.c',
-#     './src/register_class.c',
-#     './src/fs/fd.c',
-# ]
 
 ROOT_SRC = [
     './php_uv.c',
@@ -221,5 +194,5 @@ library('php_uv',
   dependencies: [
     libuv_dep
   ],
-  c_args: ldflags
+  # c_args: ldflags
 )

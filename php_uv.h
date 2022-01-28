@@ -27,11 +27,11 @@
 #define PHP_UV_PROBE(PROBE)
 #endif
 
-#include "php.h"
-#include "uv.h"
+#include <php.h>
+#include <uv.h>
 
-#include "php_network.h"
-#include "php_streams.h"
+#include <php_network.h>
+#include <php_streams.h>
 
 #if defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)
 #include "ext/sockets/php_sockets.h"
