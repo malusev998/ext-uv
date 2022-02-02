@@ -2,7 +2,11 @@
 .vs/
 # ignore phpized files
 Makefile.global
+.DS_Store
 acinclude.m4
+.vscode/
+vscode/
+.idea/
 aclocal.m4
 autom4te.cache
 build
@@ -33,7 +37,6 @@ config.log
 config.nice
 config.status
 config.sub
-
 
 # ignore dtrace header
 phpuv_dtrace.h
