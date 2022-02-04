@@ -16,8 +16,9 @@
    +----------------------------------------------------------------------+
  */
 
-#include "php_uv.h"
 #include <fcntl.h>
+
+#include "php_uv.h"
 
 void php_uv_init(zend_class_entry *uv_class_entry)
 {
@@ -41,7 +42,6 @@ void php_uv_init(zend_class_entry *uv_class_entry)
 	zend_declare_class_constant_long(uv_class_entry, "S_IFDIR",  sizeof("S_IFDIR")-1, S_IFDIR TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "S_IFREG",  sizeof("S_IFREG")-1, S_IFREG TSRMLS_CC);
 
-#ifndef PHP_WIN32
 	zend_declare_class_constant_long(uv_class_entry, "O_NOCTTY",  sizeof("O_NOCTTY")-1, O_NOCTTY TSRMLS_CC);
 
 	zend_declare_class_constant_long(uv_class_entry, "S_IRWXU",  sizeof("S_IRWXU")-1, S_IRWXU TSRMLS_CC);
@@ -97,11 +97,7 @@ void php_uv_init(zend_class_entry *uv_class_entry)
 	zend_declare_class_constant_long(uv_class_entry, "SIGXCPU",  sizeof("SIGXCPU")-1, (long) SIGXCPU TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIGXFSZ",  sizeof("SIGXFSZ")-1, (long) SIGXFSZ TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIGVTALRM",sizeof("SIGVTALRM")-1, (long) SIGVTALRM TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "SIGPROF",  sizeof("SIGPROF")-1, (long) SIGPROF TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "SIGWINCH", sizeof("SIGWINCH")-1, (long) SIGWINCH TSRMLS_CC);
-#ifdef SIGPOLL
-	zend_declare_class_constant_long(uv_class_entry, "SIGPOLL",  sizeof("SIGPOLL")-1, (long) SIGPOLL TSRMLS_CC);
-#endif
+	zend_declare_class_constant_long(uv_class_entry, "SIGPROF", sizeof("SIGPROF") - 1, (long)SIGPROF TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIGIO",    sizeof("SIGIO")-1, (long) SIGIO TSRMLS_CC);
 #ifdef SIGPWR
 	zend_declare_class_constant_long(uv_class_entry, "SIGPWR",   sizeof("SIGPWR")-1, (long) SIGPWR TSRMLS_CC);
@@ -109,27 +105,6 @@ void php_uv_init(zend_class_entry *uv_class_entry)
 #ifdef SIGSYS
 	zend_declare_class_constant_long(uv_class_entry, "SIGSYS",   sizeof("SIGSYS")-1, (long) SIGSYS TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIGBABY",  sizeof("SIGBABY")-1, (long) SIGSYS TSRMLS_CC);
-#endif
-
-#else
-	zend_declare_class_constant_long(uv_class_entry, "S_IRWXU",  sizeof("S_IRWXU")-1, _S_IWRITE | _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IRUSR",  sizeof("S_IRUSR")-1, _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IWUSR",  sizeof("S_IWUSR")-1, _S_IWRITE TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IXUSR",  sizeof("S_IXUSR")-1, 0 TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IRWXG",  sizeof("S_IRWXG")-1, _S_IWRITE | _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IRGRP",  sizeof("S_IRGRP")-1, _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IWGRP",  sizeof("S_IWGRP")-1, _S_IWRITE TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IXGRP",  sizeof("S_IXGRP")-1, 0 TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IRWXO",  sizeof("S_IRWXO")-1, _S_IWRITE | _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IROTH",  sizeof("S_IROTH")-1, _S_IREAD TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IWOTH",  sizeof("S_IWOTH")-1, _S_IWRITE TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "S_IXOTH",  sizeof("S_IXOTH")-1, 0 TSRMLS_CC);
-
-	/* Windows Signal Constants */
-	zend_declare_class_constant_long(uv_class_entry, "SIGBREAK", sizeof("SIGBREAK")-1, (long) SIGBREAK TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "SIGINT",   sizeof("SIGINT")-1, (long) SIGINT TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "SIGHUP",   sizeof("SIGHUP")-1, (long) SIGHUP TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry, "SIGWINCH", sizeof("SIGWINCH")-1, (long) SIGWINCH TSRMLS_CC);
 #endif
 
 	zend_declare_class_constant_long(uv_class_entry, "AF_INET",  sizeof("AF_INET")-1, AF_INET TSRMLS_CC);
@@ -175,21 +150,17 @@ void php_uv_init(zend_class_entry *uv_class_entry)
 	zend_declare_class_constant_long(uv_class_entry,  "INHERIT_FD", sizeof("INHERIT_FD")-1, UV_INHERIT_FD TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "INHERIT_STREAM", sizeof("INHERIT_STREAM")-1, UV_INHERIT_STREAM TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "READABLE_PIPE", sizeof("READABLE_PIPE")-1, UV_READABLE_PIPE TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry,  "WRITABLE_PIPE", sizeof("WRITABLE_PIPE")-1, UV_WRITABLE_PIPE TSRMLS_CC);
-#if UV_VERSION_HEX >= ((1 << 16) | (21 << 8))
-	zend_declare_class_constant_long(uv_class_entry,  "OVERLAPPED_PIPE", sizeof("OVERLAPPED_PIPE")-1, UV_OVERLAPPED_PIPE TSRMLS_CC);
-#endif
+	zend_declare_class_constant_long(uv_class_entry, "WRITABLE_PIPE", sizeof("WRITABLE_PIPE") - 1, UV_WRITABLE_PIPE TSRMLS_CC);
+	zend_declare_class_constant_long(uv_class_entry, "OVERLAPPED_PIPE", sizeof("OVERLAPPED_PIPE") - 1, UV_OVERLAPPED_PIPE TSRMLS_CC);
 
 	/* process */
 	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_SETUID", sizeof("PROCESS_SETUID")-1, UV_PROCESS_SETUID TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_SETGID", sizeof("PROCESS_SETGID")-1, UV_PROCESS_SETGID TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_WINDOWS_VERBATIM_ARGUMENTS", sizeof("PROCESS_WINDOWS_VERBATIM_ARGUMENTS")-1, UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_DETACHED", sizeof("PROCESS_DETACHED")-1, UV_PROCESS_DETACHED TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_WINDOWS_HIDE", sizeof("PROCESS_WINDOWS_HIDE")-1, UV_PROCESS_WINDOWS_HIDE TSRMLS_CC);
-#if UV_VERSION_HEX >= ((1 << 16) | (24 << 8))
+	zend_declare_class_constant_long(uv_class_entry, "PROCESS_WINDOWS_HIDE", sizeof("PROCESS_WINDOWS_HIDE") - 1, UV_PROCESS_WINDOWS_HIDE TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_WINDOWS_HIDE_CONSOLE", sizeof("PROCESS_WINDOWS_HIDE_CONSOLE")-1, UV_PROCESS_WINDOWS_HIDE_CONSOLE TSRMLS_CC);
-	zend_declare_class_constant_long(uv_class_entry,  "PROCESS_WINDOWS_HIDE_GUI", sizeof("PROCESS_WINDOWS_HIDE_GUI")-1, UV_PROCESS_WINDOWS_HIDE_GUI TSRMLS_CC);
-#endif
+	zend_declare_class_constant_long(uv_class_entry, "PROCESS_WINDOWS_HIDE_GUI", sizeof("PROCESS_WINDOWS_HIDE_GUI") - 1, UV_PROCESS_WINDOWS_HIDE_GUI TSRMLS_CC);
 
 #define PHP_UV_ERRNO_GEN(name, msg_notused) zend_declare_class_constant_long(uv_class_entry, ZEND_STRL(#name), UV_##name);
 	UV_ERRNO_MAP(PHP_UV_ERRNO_GEN)

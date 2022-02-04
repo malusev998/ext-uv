@@ -19,57 +19,25 @@
 
 #pragma GCC diagnostic ignored "-Wmissing-braces"
 
+#include <stdint.h>
+
 #include "php_uv.h"
-#include "php_main.h"
-#include "ext/standard/info.h"
-#include "zend_smart_str.h"
+
+#include <Zend/zend_smart_str.h>
+#include <ext/standard/info.h>
+#include <php_main.h>
 
 #ifndef PHP_UV_DEBUG
 #define PHP_UV_DEBUG 0
 #endif
 
-#if defined(ZTS) && PHP_VERSION_ID < 80000
-#undef TSRMLS_C
-#undef TSRMLS_CC
-#undef TSRMLS_D
-#undef TSRMLS_DC
-#define TSRMLS_C tsrm_ls
-#define TSRMLS_CC , TSRMLS_C
-#define TSRMLS_D void *tsrm_ls
-#define TSRMLS_DC , TSRMLS_D
-
-#ifdef COMPILE_DL_UV
-ZEND_TSRMLS_CACHE_DEFINE()
-#endif
-#endif
-
 ZEND_DECLARE_MODULE_GLOBALS(uv);
 
-#ifndef GC_ADDREF
-	#define GC_ADDREF(ref) ++GC_REFCOUNT(ref)
-#endif
+#include "src/args/uv_argsinfo.h"
 
-#if PHP_VERSION_ID < 70100
-	#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_paramer_class_error(__VA_ARGS__)
-#elif PHP_VERSION_ID < 70200 || PHP_VERSION_ID >= 70300
-	#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_parameter_class_error(__VA_ARGS__)
-#else
-	#define uv_zend_wrong_parameter_class_error(...) zend_wrong_parameter_class_error(__VA_ARGS__)
-#endif
-
-#if PHP_VERSION_ID < 70200
-	#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0)
-#else
-	#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0, 0)
-#endif
-
-#if PHP_VERSION_ID < 70400
-	#define _error_code error_code
-#endif
-
-#if PHP_VERSION_ID >= 80000
+#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_parameter_class_error(__VA_ARGS__)
+#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0, 0)
 #define zend_internal_type_error(strict_types, ...) zend_type_error(__VA_ARGS__)
-#endif
 
 #define UV_PARAM_OBJ_EX(dest, type, check_null, ce, ...) \
 	{ \
@@ -239,11 +207,11 @@ static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_clas
 		ZVAL_UNDEF(&uv->fs_fd_alt); \
 	}
 
-#if PHP_VERSION_ID < 70300
- #define PHP_UV_SKIP_DTOR(uv) do { GC_FLAGS(&uv->std) |= IS_OBJ_DESTRUCTOR_CALLED; } while (0)
-#else
- #define PHP_UV_SKIP_DTOR(uv) do { GC_ADD_FLAGS(&uv->std, IS_OBJ_DESTRUCTOR_CALLED); } while (0)
-#endif
+#define PHP_UV_SKIP_DTOR(uv)                              \
+	do                                                    \
+	{                                                     \
+		GC_ADD_FLAGS(&uv->std, IS_OBJ_DESTRUCTOR_CALLED); \
+	} while (0)
 #define PHP_UV_IS_DTORED(uv) (GC_FLAGS(&uv->std) & IS_OBJ_DESTRUCTOR_CALLED)
 
 #define PHP_UV_SOCKADDR_IPV4_INIT(sockaddr) PHP_UV_INIT_GENERIC(sockaddr, php_uv_sockaddr_t, uv_sockaddr_ipv4_ce);
@@ -282,25 +250,6 @@ static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_clas
 #else
 #define PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(hander, uv)
 #define PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(hander, uv)
-#endif
-
-#if defined(ZTS) && PHP_VERSION_ID < 80000
-#define UV_FETCH_ALL(ls, id, type) ((type) (*((void ***) ls))[TSRM_UNSHUFFLE_RSRC_ID(id)])
-#define UV_FETCH_CTX(ls, id, type, element) (((type) (*((void ***) ls))[TSRM_UNSHUFFLE_RSRC_ID(id)])->element)
-#define UV_CG(ls, v)  UV_FETCH_CTX(ls, compiler_globals_id, zend_compiler_globals*, v)
-#define UV_CG_ALL(ls) UV_FETCH_ALL(ls, compiler_globals_id, zend_compiler_globals*)
-#define UV_EG(ls, v)  UV_FETCH_CTX(ls, executor_globals_id, zend_executor_globals*, v)
-#define UV_SG(ls, v)  UV_FETCH_CTX(ls, sapi_globals_id, sapi_globals_struct*, v)
-#define UV_EG_ALL(ls) UV_FETCH_ALL(ls, executor_globals_id, zend_executor_globals*)
-#endif
-
-#if !defined(PHP_WIN32) && !(defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
-# if PHP_VERSION_ID >= 80000
-__attribute__((weak)) zend_class_entry *socket_ce = NULL;
-# else
-int (*php_sockets_le_socket_ptr)(void) = NULL;
-int php_sockets_le_socket(void) __attribute__((weak));
-# endif
 #endif
 
 /* objects */
@@ -344,7 +293,6 @@ static zend_object_handlers uv_lock_handlers;
 
 static zend_class_entry *uv_stdio_ce;
 static zend_object_handlers uv_stdio_handlers;
-
 
 typedef struct {
 	uv_write_t req;
@@ -424,26 +372,27 @@ static php_socket_t php_uv_zval_to_valid_poll_fd(zval *ptr)
 
 	/* Validate Checks */
 
-#if !defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
 	php_socket *socket;
-#endif
 	/* TODO: is this correct on windows platform? */
-	if (Z_TYPE_P(ptr) == IS_RESOURCE) {
-		if ((stream = (php_stream *) zend_fetch_resource_ex(ptr, NULL, php_file_le_stream()))) {
+	if (Z_TYPE_P(ptr) == IS_RESOURCE)
+	{
+		if ((stream = (php_stream *)zend_fetch_resource_ex(ptr, NULL, php_file_le_stream())))
+		{
 			/* make sure only valid resource streams are passed - plainfiles and most php streams are invalid */
-			if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "PHP") && (!stream->orig_path || (strncmp(stream->orig_path, "php://std", sizeof("php://std") - 1) && strncmp(stream->orig_path, "php://fd", sizeof("php://fd") - 1)))) {
+			if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "PHP") && (!stream->orig_path || (strncmp(stream->orig_path, "php://std", sizeof("php://std") - 1) && strncmp(stream->orig_path, "php://fd", sizeof("php://fd") - 1))))
+			{
 				php_error_docref(NULL, E_WARNING, "invalid resource passed, this resource is not supported");
 				return -1;
 			}
 
 			/* Some streams (specifically STDIO and encrypted streams) can be cast to FDs */
-			if (php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void*)&fd, 1) == SUCCESS && fd >= 0) {
-				if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "plainfile")) {
-#ifndef PHP_WIN32
+			if (php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void *)&fd, 1) == SUCCESS && fd >= 0)
+			{
+				if (stream->wrapper && !strcmp((char *)stream->wrapper->wops->label, "plainfile"))
+				{
 					struct stat stat;
 					fstat(fd, &stat);
 					if (!S_ISFIFO(stat.st_mode))
-#endif
 					{
 						php_error_docref(NULL, E_WARNING, "invalid resource passed, this plain files are not supported");
 						return -1;
@@ -453,21 +402,19 @@ static php_socket_t php_uv_zval_to_valid_poll_fd(zval *ptr)
 			}
 
 			fd = -1;
-#if PHP_VERSION_ID < 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
-		} else if (php_sockets_le_socket_ptr && (socket = (php_socket *) zend_fetch_resource_ex(ptr, NULL, php_sockets_le_socket_ptr()))) {
-			fd = socket->bsd_socket;
-#endif
-		} else {
+		}
+		else
+		{
 			php_error_docref(NULL, E_WARNING, "unhandled resource type detected.");
 			fd = -1;
 		}
-#if PHP_VERSION_ID >= 80000 && (!defined(PHP_WIN32) || (defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)))
-	} else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *) ((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std)))) {
+	}
+	else if (socket_ce && Z_TYPE_P(ptr) == IS_OBJECT && Z_OBJCE_P(ptr) == socket_ce && (socket = (php_socket *)((char *)(Z_OBJ_P(ptr)) - XtOffsetOf(php_socket, std))))
+	{
 		fd = socket->bsd_socket;
-#endif
 	}
 
-	return fd;
+  return fd;
 }
 
 static php_socket_t php_uv_zval_to_fd(zval *ptr)
@@ -1139,33 +1086,33 @@ static zval php_uv_address_to_zval(const struct sockaddr *addr)
 	array_init(&tmp);
 
 	switch (addr->sa_family) {
-		case AF_INET6:
-		{
-			a6 = (const struct sockaddr_in6 *)addr;
-			uv_inet_ntop(AF_INET, &a6->sin6_addr, ip, sizeof ip);
-			port = ntohs(a6->sin6_port);
+	case AF_INET6:
+	{
+		a6 = (const struct sockaddr_in6 *)addr;
+		uv_inet_ntop(AF_INET, &a6->sin6_addr, ip, sizeof ip);
+		port = ntohs(a6->sin6_port);
 
-			add_assoc_string_ex(&tmp, ZEND_STRL("address"), ip);
-			add_assoc_long_ex(&tmp, ZEND_STRL("port"), port);
-			add_assoc_string_ex(&tmp, ZEND_STRL("family"), "IPv6");
-			break;
-		}
-		case AF_INET:
-		{
-			a4 = (const struct sockaddr_in *)addr;
-			uv_inet_ntop(AF_INET, &a4->sin_addr, ip, sizeof ip);
-			port = ntohs(a4->sin_port);
-
-			add_assoc_string_ex(&tmp, ZEND_STRL("address"), ip);
-			add_assoc_long_ex(&tmp, ZEND_STRL("port"), port);
-			add_assoc_string_ex(&tmp, ZEND_STRL("family"), "IPv4");
-			break;
-		}
-		default:
+		add_assoc_string_ex(&tmp, ZEND_STRL("address"), ip);
+		add_assoc_long_ex(&tmp, ZEND_STRL("port"), port);
+		add_assoc_string_ex(&tmp, ZEND_STRL("family"), "IPv6");
 		break;
 	}
+  case AF_INET:
+  {
+	  a4 = (const struct sockaddr_in *)addr;
+	  uv_inet_ntop(AF_INET, &a4->sin_addr, ip, sizeof ip);
+	  port = ntohs(a4->sin_port);
 
-	return tmp;
+	  add_assoc_string_ex(&tmp, ZEND_STRL("address"), ip);
+	  add_assoc_long_ex(&tmp, ZEND_STRL("port"), port);
+	  add_assoc_string_ex(&tmp, ZEND_STRL("family"), "IPv4");
+	  break;
+  }
+  default:
+	  break;
+  }
+
+  return tmp;
 }
 
 static zval php_uv_make_stat(const uv_stat_t *s)
@@ -1362,57 +1309,51 @@ static int php_uv_do_callback(zval *retval_ptr, php_uv_cb_t *callback, zval *par
 static int php_uv_do_callback2(zval *retval_ptr, php_uv_t *uv, zval *params, int param_count, enum php_uv_callback_type type TSRMLS_DC)
 {
 	int error = 0;
-
-#if defined(ZTS) && PHP_VERSION_ID < 80000
-	void *old = tsrm_set_interpreter_context(tsrm_ls);
-#endif
-	if (ZEND_FCI_INITIALIZED(uv->callback[type]->fci)) {
-		uv->callback[type]->fci.params        = params;
-		uv->callback[type]->fci.retval        = retval_ptr;
-		uv->callback[type]->fci.param_count   = param_count;
-#if PHP_VERSION_ID < 80000
-		uv->callback[type]->fci.no_separation = 1;
-#endif
-
-		if (zend_call_function(&uv->callback[type]->fci, &uv->callback[type]->fcc) != SUCCESS) {
+	if (ZEND_FCI_INITIALIZED(uv->callback[type]->fci))
+	{
+		uv->callback[type]->fci.params = params;
+		uv->callback[type]->fci.retval = retval_ptr;
+		uv->callback[type]->fci.param_count = param_count;
+		if (zend_call_function(&uv->callback[type]->fci, &uv->callback[type]->fcc) != SUCCESS)
+		{
 			error = -1;
 		}
-	} else {
+	}
+	else
+	{
 		error = -2;
 	}
+  // zend_fcall_info_args_clear(&uv->callback[type]->fci, 0);
 
-#if defined(ZTS) && PHP_VERSION_ID < 80000
-	tsrm_set_interpreter_context(old);
-#endif
-	//zend_fcall_info_args_clear(&uv->callback[type]->fci, 0);
+  if (EG(exception))
+  {
+	  switch (type)
+	  {
+	  case PHP_UV_FS_CB:
+		  uv_stop(uv->uv.fs.loop);
+		  break;
+	  case PHP_UV_GETADDR_CB:
+		  uv_stop(uv->uv.addrinfo.loop);
+		  break;
+	  case PHP_UV_AFTER_WORK_CB:
+		  uv_stop(uv->uv.work.loop);
+		  break;
+	  case PHP_UV_SHUTDOWN_CB:
+		  uv_stop(uv->uv.shutdown.handle->loop);
+		  break;
+	  case PHP_UV_SEND_CB:
+		  uv_stop(uv->uv.udp_send.handle->loop);
+		  break;
+	  case PHP_UV_CONNECT_CB:
+	  case PHP_UV_PIPE_CONNECT_CB:
+		  uv_stop(uv->uv.connect.handle->loop);
+		  break;
+	  default:
+		  uv_stop(uv->uv.handle.loop);
+	  }
+  }
 
-	if (EG(exception)) {
-		switch (type) {
-			case PHP_UV_FS_CB:
-				uv_stop(uv->uv.fs.loop);
-				break;
-			case PHP_UV_GETADDR_CB:
-				uv_stop(uv->uv.addrinfo.loop);
-				break;
-			case PHP_UV_AFTER_WORK_CB:
-				uv_stop(uv->uv.work.loop);
-				break;
-			case PHP_UV_SHUTDOWN_CB:
-				uv_stop(uv->uv.shutdown.handle->loop);
-				break;
-			case PHP_UV_SEND_CB:
-				uv_stop(uv->uv.udp_send.handle->loop);
-				break;
-			case PHP_UV_CONNECT_CB:
-			case PHP_UV_PIPE_CONNECT_CB:
-				uv_stop(uv->uv.connect.handle->loop);
-				break;
-			default:
-				uv_stop(uv->uv.handle.loop);
-		}
-	}
-
-	return error;
+  return error;
 }
 
 #if defined(ZTS) && PHP_VERSION_ID < 80000
@@ -2037,12 +1978,8 @@ static zval php_uv_stat_to_zval(const uv_stat_t *stat)
 	add_assoc_long_ex(&result, ZEND_STRL("gid"), stat->st_gid);
 	add_assoc_long_ex(&result, ZEND_STRL("rdev"), stat->st_rdev);
 	add_assoc_long_ex(&result, ZEND_STRL("size"), stat->st_size);
-
-#ifndef PHP_WIN32
 	add_assoc_long_ex(&result, ZEND_STRL("blksize"), stat->st_blksize);
 	add_assoc_long_ex(&result, ZEND_STRL("blocks"), stat->st_blocks);
-#endif
-
 	add_assoc_long_ex(&result, ZEND_STRL("atime"), stat->st_atim.tv_sec);
 	add_assoc_long_ex(&result, ZEND_STRL("mtime"), stat->st_mtim.tv_sec);
 	add_assoc_long_ex(&result, ZEND_STRL("ctime"), stat->st_ctim.tv_sec);
@@ -2496,78 +2433,70 @@ static zend_function_entry php_uv_empty_methods[] = {
 	{0}
 };
 
-#if PHP_VERSION_ID >= 80000
-int php_uv_cast_object(zend_object *readobj, zval *writeobj, int type) {
-#else
-int php_uv_cast_object(zval *readobj_zv, zval *writeobj, int type) {
-	zend_object *readobj = Z_OBJ_P(readobj_zv);
-#endif
-	if (type == IS_LONG) {
+int php_uv_cast_object(zend_object *readobj, zval *writeobj, int type)
+{
+	if (type == IS_LONG)
+	{
 		ZVAL_LONG(writeobj, readobj->handle);
 		return SUCCESS;
-	} else {
-#if PHP_VERSION_ID >= 80000
-		return zend_std_cast_object_tostring(readobj, writeobj, type);
-#else
-		return zend_std_cast_object_tostring(readobj_zv, writeobj, type);
-#endif
 	}
+
+	return zend_std_cast_object_tostring(readobj, writeobj, type);
 }
 
-#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_get_debug_info(zend_object *object, int *is_temp) {
-	php_uv_t *uv = (php_uv_t *) object;
-#else
-static HashTable *php_uv_get_debug_info(zval *object, int *is_temp) {
-	php_uv_t *uv = (php_uv_t *) Z_OBJ_P(object);
-#endif
+	php_uv_t *uv = (php_uv_t *)object;
 	HashTable *ht = zend_std_get_debug_info(object, is_temp);
-	if (uv->std.ce == uv_poll_ce) {
-		if (!*is_temp) {
+	if (uv->std.ce == uv_poll_ce)
+	{
+		if (!*is_temp)
+		{
 			int fd;
-			if (uv_fileno(&uv->uv.handle, (uv_os_fd_t *)&fd) == 0) { /* not actually a fd on windows but a handle pointr address, but okay. */
+			if (uv_fileno(&uv->uv.handle, (uv_os_fd_t *)&fd) == 0)
+			{ /* not actually a fd on windows but a handle pointr address, but okay. */
 				*is_temp = 1;
 				ht = zend_array_dup(ht);
 				zval fdzv;
 				ZVAL_LONG(&fdzv, fd);
-				zend_hash_update(ht, zend_string_init("@fd", sizeof("@fd")-1, 0), &fdzv);
+				zend_hash_update(ht, zend_string_init("@fd", sizeof("@fd") - 1, 0), &fdzv);
 			}
 		}
 	}
 	return ht;
 }
 
-#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_get_gc(zend_object *object, zval **table, int *n) {
-	php_uv_t *uv = (php_uv_t *) object;
-#else
-static HashTable *php_uv_get_gc(zval *object, zval **table, int *n) {
-	php_uv_t *uv = (php_uv_t *) Z_OBJ_P(object);
-#endif
+	php_uv_t *uv = (php_uv_t *)object;
 	int i;
 
-	if (PHP_UV_IS_DTORED(uv)) {
+	if (PHP_UV_IS_DTORED(uv))
+	{
 		*n = 0;
 		return NULL;
 	}
 
-	// include trailing zvals like fs_fd/_alt
-	*n = (sizeof(php_uv_t) -  XtOffsetOf(php_uv_t, gc_data)) / sizeof(zval);
-	for (i = 0; i < PHP_UV_CB_MAX; i++) {
-		php_uv_cb_t *cb = uv->callback[i];
-		if (cb) {
-			ZVAL_COPY_VALUE(&uv->gc_data[i * 2], &cb->fci.function_name);
-			if (cb->fci.object) {
-				ZVAL_OBJ(&uv->gc_data[i * 2 + 1], cb->fci.object);
-			}
-		} else {
-			ZVAL_UNDEF(&uv->gc_data[i * 2]);
-			ZVAL_UNDEF(&uv->gc_data[i * 2 + 1]);
-		}
-	}
-	*table = uv->gc_data;
+  // include trailing zvals like fs_fd/_alt
+  *n = (sizeof(php_uv_t) - XtOffsetOf(php_uv_t, gc_data)) / sizeof(zval);
+  for (i = 0; i < PHP_UV_CB_MAX; i++)
+  {
+	  php_uv_cb_t *cb = uv->callback[i];
+	  if (cb)
+	  {
+		  ZVAL_COPY_VALUE(&uv->gc_data[i * 2], &cb->fci.function_name);
+		  if (cb->fci.object)
+		  {
+			  ZVAL_OBJ(&uv->gc_data[i * 2 + 1], cb->fci.object);
+		  }
+	  }
+	  else
+	  {
+		  ZVAL_UNDEF(&uv->gc_data[i * 2]);
+		  ZVAL_UNDEF(&uv->gc_data[i * 2 + 1]);
+	  }
+  }
+  *table = uv->gc_data;
 
-	return uv->std.properties;
+  return uv->std.properties;
 }
 
 static void php_uv_loop_get_gc_walk_cb(uv_handle_t* handle, void *arg) {
@@ -2590,34 +2519,28 @@ static void php_uv_loop_get_gc_walk_cb(uv_handle_t* handle, void *arg) {
 	}
 }
 
-
-#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_loop_get_gc(zend_object *object, zval **table, int *n) {
-	php_uv_loop_t *loop = (php_uv_loop_t *) object;
-#else
-static HashTable *php_uv_loop_get_gc(zval *object, zval **table, int *n) {
-	php_uv_loop_t *loop = (php_uv_loop_t *) Z_OBJ_P(object);
-#endif
-	struct { int *n; php_uv_loop_t *loop; } data;
+	php_uv_loop_t *loop = (php_uv_loop_t *)object;
+	struct
+	{
+		int *n;
+		php_uv_loop_t *loop;
+	} data;
 	data.n = n;
 	data.loop = loop;
 
 	*n = 0;
-	if (!PHP_UV_IS_DTORED(loop)) {
+	if (!PHP_UV_IS_DTORED(loop))
+	{
 		uv_walk(&loop->loop, php_uv_loop_get_gc_walk_cb, &data);
 		*table = loop->gc_buffer;
 	}
 
-	return loop->std.properties;
+  return loop->std.properties;
 }
 
-#if PHP_VERSION_ID >= 80000
 static HashTable *php_uv_stdio_get_gc(zend_object *object, zval **table, int *n) {
-	php_uv_stdio_t *stdio = (php_uv_stdio_t *) object;
-#else
-static HashTable *php_uv_stdio_get_gc(zval *object, zval **table, int *n) {
-	php_uv_stdio_t *stdio = (php_uv_stdio_t *) Z_OBJ_P(object);
-#endif
+	php_uv_stdio_t *stdio = (php_uv_stdio_t *)object;
 
 	*n = 1;
 	*table = &stdio->stream;
@@ -2692,7 +2615,7 @@ static zend_class_entry *php_uv_register_internal_class_ex(const char *name, zen
 #endif
 	new->ce_flags |= ZEND_ACC_FINAL;
 #if PHP_VERSION_ID >= 80100
-	new->ce_flags |= ZEND_ACC_NOT_SERIALIZABLE ;
+	new->ce_flags |= ZEND_ACC_NOT_SERIALIZABLE;
 #endif
 	new->create_object = php_uv_create_uv;
 
@@ -2712,11 +2635,7 @@ PHP_MINIT_FUNCTION(uv)
 {
 	PHP_UV_PROBE(MINIT);
 
-#if PHP_VERSION_ID >= 70300
 	memcpy(&uv_default_handlers, &std_object_handlers, sizeof(zend_object_handlers));
-#else
-	memcpy(&uv_default_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
-#endif
 	uv_default_handlers.clone_obj = NULL;
 	uv_default_handlers.get_constructor = php_uv_get_ctor;
 	uv_default_handlers.cast_object = php_uv_cast_object;
@@ -2782,30 +2701,6 @@ PHP_MINIT_FUNCTION(uv)
 	uv_stdio_handlers.dtor_obj = destruct_uv_stdio;
 	uv_stdio_handlers.get_gc = php_uv_stdio_get_gc;
 
-#if !defined(PHP_WIN32) && !(defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS))
-	{
-		zend_module_entry *sockets;
-		if ((sockets = zend_hash_str_find_ptr(&module_registry, ZEND_STRL("sockets")))) {
-			if (sockets->handle) { // shared
-# if PHP_VERSION_ID >= 80000
-				zend_class_entry **socket_ce_ptr = (zend_class_entry **) DL_FETCH_SYMBOL(sockets->handle, "socket_ce");
-				if (socket_ce_ptr == NULL) {
-					socket_ce_ptr = (zend_class_entry **) DL_FETCH_SYMBOL(sockets->handle, "_socket_ce");
-				}
-				socket_ce = *socket_ce_ptr;
-# else
-				php_sockets_le_socket_ptr = (int (*)(void)) DL_FETCH_SYMBOL(sockets->handle, "php_sockets_le_socket");
-				if (php_sockets_le_socket_ptr == NULL) {
-					php_sockets_le_socket_ptr = (int (*)(void)) DL_FETCH_SYMBOL(sockets->handle, "_php_sockets_le_socket");
-				}
-			} else {
-				php_sockets_le_socket_ptr = &php_sockets_le_socket;
-#endif
-			}
-		}
-	}
-#endif
-
 	return SUCCESS;
 }
 
@@ -2827,704 +2722,9 @@ PHP_RSHUTDOWN_FUNCTION(uv)
 	return SUCCESS;
 }
 
-ZEND_BEGIN_ARG_INFO_EX(arginfo_void, 0, 0, 0)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_run, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, run_mode)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_stop, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_loop_delete, 0, 0, 1)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_now, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_connect, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, sock_addr)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_connect6, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, ipv6_addr)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_listen, 0, 0, 3)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, backlog)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_accept, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, client)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_read_start, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_read_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, server)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_write, 0, 0, 3)
-	ZEND_ARG_INFO(0, client)
-	ZEND_ARG_INFO(0, data)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_write2, 0, 0, 4)
-	ZEND_ARG_INFO(0, client)
-	ZEND_ARG_INFO(0, data)
-	ZEND_ARG_INFO(0, send)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_strerror, 0, 0, 1)
-	ZEND_ARG_INFO(0, error)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_err_name, 0, 0, 1)
-	ZEND_ARG_INFO(0, error)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_idle_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, idle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_start, 0, 0, 3)
-	ZEND_ARG_INFO(0, timer)
-	ZEND_ARG_INFO(0, timeout)
-	ZEND_ARG_INFO(0, repeat)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, timer)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_again, 0, 0, 1)
-	ZEND_ARG_INFO(0, timer)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_set_repeat, 0, 0, 2)
-	ZEND_ARG_INFO(0, timer)
-	ZEND_ARG_INFO(0, timeout)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_timer_get_repeat, 0, 0, 1)
-	ZEND_ARG_INFO(0, timer)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_idle_start, 0, 0, 2)
-	ZEND_ARG_INFO(0, timer)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_open, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, tcpfd)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_bind, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, address)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_bind6, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, address)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_shutdown, 0, 0, 2)
-	ZEND_ARG_INFO(0, stream)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_close, 0, 0, 1)
-	ZEND_ARG_INFO(0, stream)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_idle_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_update_time, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_is_active, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_is_closing, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_is_readable, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_is_writable, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_walk, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, opaque)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_guess_handle, 0, 0, 1)
-	ZEND_ARG_INFO(0, fd)
-ZEND_END_ARG_INFO()
-
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_ref, 0, 0, 1)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_unref, 0, 0, 1)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_nodelay, 0, 0, 2)
-	ZEND_ARG_INFO(0, tcp)
-	ZEND_ARG_INFO(0, enabled)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_ip4_addr, 0, 0, 2)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, port)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_ip6_addr, 0, 0, 2)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, port)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_open, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, udpfd)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_bind, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, flags)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_bind6, 0, 0, 2)
-	ZEND_ARG_INFO(0, resource)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, flags)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_recv_start, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_recv_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, server)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_set_multicast_loop, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, enabled)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_set_multicast_ttl, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, ttl)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_set_broadcast, 0, 0, 2)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, enabled)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_send, 0, 0, 3)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, buffer)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_send6, 0, 0, 3)
-	ZEND_ARG_INFO(0, server)
-	ZEND_ARG_INFO(0, buffer)
-	ZEND_ARG_INFO(0, address)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_open, 0, 0, 2)
-	ZEND_ARG_INFO(0, file)
-	ZEND_ARG_INFO(0, pipe)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, file)
-	ZEND_ARG_INFO(0, ipc)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_bind, 0, 0, 2)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, name)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_connect, 0, 0, 3)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, name)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_pending_count, 0, 0, 1)
-    ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_pending_type, 0, 0, 1)
-    ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_pipe_pending_instances, 0, 0, 2)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, count)
-ZEND_END_ARG_INFO()
-
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_getaddrinfo, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, node)
-	ZEND_ARG_INFO(0, service)
-	ZEND_ARG_INFO(0, hints)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_spawn, 0, 0, 7)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, command)
-	ZEND_ARG_INFO(0, args)
-	ZEND_ARG_INFO(0, stdio)
-	ZEND_ARG_INFO(0, cwd)
-	ZEND_ARG_INFO(0, env)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, flags)
-	ZEND_ARG_INFO(0, options)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_kill, 0, 0, 2)
-	ZEND_ARG_INFO(0, pid)
-	ZEND_ARG_INFO(0, signal)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_process_kill, 0, 0, 2)
-	ZEND_ARG_INFO(0, process)
-	ZEND_ARG_INFO(0, signal)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_process_get_pid, 0, 0, 1)
-	ZEND_ARG_INFO(0, process)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_chdir, 0, 0, 1)
-	ZEND_ARG_INFO(0, dir)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tty_get_winsize, 0, 0, 3)
-	ZEND_ARG_INFO(0, tty)
-	ZEND_ARG_INFO(1, width)
-	ZEND_ARG_INFO(1, height)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tty_init, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, readable)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_event_init, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, flags)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_sendfile, 0, 0, 5)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, in)
-	ZEND_ARG_INFO(0, out)
-	ZEND_ARG_INFO(0, offset)
-	ZEND_ARG_INFO(0, length)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_readdir, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, flags)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_scandir, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, flags)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_fstat, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_lstat, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_stat, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_readlink, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_symlink, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, from)
-	ZEND_ARG_INFO(0, to)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, flags)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_link, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, from)
-	ZEND_ARG_INFO(0, to)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_fchown, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, uid)
-	ZEND_ARG_INFO(0, gid)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_chown, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, uid)
-	ZEND_ARG_INFO(0, gid)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_fchmod, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, mode)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_chmod, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, mode)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_futime, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, utime)
-	ZEND_ARG_INFO(0, atime)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_utime, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, utime)
-	ZEND_ARG_INFO(0, atime)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_open, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, flag)
-	ZEND_ARG_INFO(0, mode)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_read, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, offset)
-	ZEND_ARG_INFO(0, size)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_close, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_write, 0, 0, 4)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, buffer)
-	ZEND_ARG_INFO(0, offset)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_fsync, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_fdatasync, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_ftruncate, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-	ZEND_ARG_INFO(0, offset)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_mkdir, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, mode)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_rmdir, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_unlink, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_rename, 0, 0, 3)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, from)
-	ZEND_ARG_INFO(0, to)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_rdlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_tryrdlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_rdunlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_wrlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_trywrlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_rwlock_wrunlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_mutex_lock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_mutex_trylock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_mutex_unlock, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_sem_init, 0, 0, 1)
-	ZEND_ARG_INFO(0, val)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_sem_post, 0, 0, 1)
-	ZEND_ARG_INFO(0, resource)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_sem_wait, 0, 0, 1)
-	ZEND_ARG_INFO(0, resource)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_sem_trywait, 0, 0, 1)
-	ZEND_ARG_INFO(0, resource)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_prepare_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_prepare_start, 0, 0, 2)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_prepare_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_check_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_check_start, 0, 0, 2)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_check_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_async_send, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_async_init, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_getsockname, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_getpeername, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_getsockname, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_tcp_simultaneous_accepts, 0, 0, 2)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, enable)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_udp_set_membership, 0, 0, 4)
-	ZEND_ARG_INFO(0, client)
-	ZEND_ARG_INFO(0, multicast_addr)
-	ZEND_ARG_INFO(0, interface_addr)
-	ZEND_ARG_INFO(0, membership)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_ip6_name, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_ip4_name, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_poll_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_poll_start, 0, 0, 4)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, callback)
-	ZEND_ARG_INFO(0, path)
-	ZEND_ARG_INFO(0, interval)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_fs_poll_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_poll_init, 0, 0, 2)
-	ZEND_ARG_INFO(0, loop)
-	ZEND_ARG_INFO(0, fd)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_poll_start, 0, 0, 3)
-	ZEND_ARG_INFO(0, handle)
-	ZEND_ARG_INFO(0, events)
-	ZEND_ARG_INFO(0, callback)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_poll_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, handle)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_signal_init, 0, 0, 0)
-	ZEND_ARG_INFO(0, loop)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_signal_start, 0, 0, 3)
-	ZEND_ARG_INFO(0, sig_handle)
-	ZEND_ARG_INFO(0, sig_callback)
-	ZEND_ARG_INFO(0, sig_num)
-ZEND_END_ARG_INFO()
-
-ZEND_BEGIN_ARG_INFO_EX(arginfo_uv_signal_stop, 0, 0, 1)
-	ZEND_ARG_INFO(0, sig_handle)
-ZEND_END_ARG_INFO()
-
 /* PHP Functions */
 
-/* {{{ proto void uv_unref(UV $uv_t)
-*/
+/* {{{ proto void uv_unref(UV $uv_t) */
 PHP_FUNCTION(uv_unref)
 {
 	php_uv_t *uv;
@@ -3537,8 +2737,7 @@ PHP_FUNCTION(uv_unref)
 }
 /* }}} */
 
-/* {{{ proto string uv_err_name(long $error_code)
-*/
+/* {{{ proto string uv_err_name(long $error_code) */
 PHP_FUNCTION(uv_err_name)
 {
 	zend_long error_code;
@@ -3560,16 +2759,15 @@ PHP_FUNCTION(uv_err_name)
 }
 /* }}} */
 
-
-/* {{{ proto string uv_strerror(long $error_code)
-*/
+/* {{{ proto string uv_strerror(long $error_code) */
 PHP_FUNCTION(uv_strerror)
 {
 	zend_long error_code;
 	const char *error_msg;
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(),
-		"l", &error_code) == FAILURE) {
+							  "l", &error_code) == FAILURE)
+	{
 		return;
 	}
 
@@ -3578,15 +2776,14 @@ PHP_FUNCTION(uv_strerror)
 }
 /* }}} */
 
-/* {{{ proto void uv_update_time([UVLoop $uv_loop = uv_default_loop()])
-*/
+/* {{{ proto void uv_update_time([UVLoop $uv_loop = uv_default_loop()]) */
 PHP_FUNCTION(uv_update_time)
 {
 	php_uv_loop_t *loop = NULL;
 
 	ZEND_PARSE_PARAMETERS_START(0, 1)
-		Z_PARAM_OPTIONAL
-		UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
+	Z_PARAM_OPTIONAL
+	UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	PHP_UV_FETCH_UV_DEFAULT_LOOP(loop);
@@ -3594,22 +2791,20 @@ PHP_FUNCTION(uv_update_time)
 }
 /* }}} */
 
-/* {{{ proto void uv_ref(UV $uv_handle)
-*/
+/* {{{ proto void uv_ref(UV $uv_handle) */
 PHP_FUNCTION(uv_ref)
 {
 	php_uv_t *uv;
 
 	ZEND_PARSE_PARAMETERS_START(1, 1)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_ce)
+	UV_PARAM_OBJ(uv, php_uv_t, uv_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	uv_ref(&uv->uv.handle);
 }
 /* }}} */
 
-/* {{{ proto void uv_run([UVLoop $uv_loop = uv_default_loop(), long $run_mode = UV::RUN_DEFAULT])
-*/
+/* {{{ proto void uv_run([UVLoop $uv_loop = uv_default_loop(), long $run_mode = UV::RUN_DEFAULT]) */
 PHP_FUNCTION(uv_run)
 {
 	php_uv_loop_t *loop = NULL;
@@ -3626,15 +2821,14 @@ PHP_FUNCTION(uv_run)
 }
 /* }}} */
 
-/* {{{ proto void uv_stop([UVLoop $uv_loop = uv_default_loop()])
-*/
+/* {{{ proto void uv_stop([UVLoop $uv_loop = uv_default_loop()])*/
 PHP_FUNCTION(uv_stop)
 {
 	php_uv_loop_t *loop = NULL;
 
 	ZEND_PARSE_PARAMETERS_START(0, 1)
-		Z_PARAM_OPTIONAL
-		UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
+	Z_PARAM_OPTIONAL
+	UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	PHP_UV_FETCH_UV_DEFAULT_LOOP(loop);
@@ -3642,16 +2836,15 @@ PHP_FUNCTION(uv_stop)
 }
 /* }}} */
 
-/* {{{ proto resource uv_signal_init([UVLoop $uv_loop = uv_default_loop()])
-*/
+/* {{{ proto resource uv_signal_init([UVLoop $uv_loop = uv_default_loop()]) */
 PHP_FUNCTION(uv_signal_init)
 {
 	php_uv_loop_t *loop = NULL;
 	php_uv_t *uv;
 
 	ZEND_PARSE_PARAMETERS_START(0, 1)
-		Z_PARAM_OPTIONAL
-		UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
+	Z_PARAM_OPTIONAL
+	UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	PHP_UV_FETCH_UV_DEFAULT_LOOP(loop);
@@ -3661,23 +2854,23 @@ PHP_FUNCTION(uv_signal_init)
 }
 /* }}} */
 
-/* {{{ proto void uv_signal_start(UVSignal $sig_handle, callable(UVSignal $sig_handle, long $sig_num) $sig_callback, int $sig_num)
-*/
+/* {{{ proto void uv_signal_start(UVSignal $sig_handle, callable(UVSignal $sig_handle, long $sig_num) $sig_callback, int $sig_num) */
 PHP_FUNCTION(uv_signal_start)
 {
 	zend_long sig_num;
 	php_uv_t *uv;
-	zend_fcall_info fci       = empty_fcall_info;
+	zend_fcall_info fci = empty_fcall_info;
 	zend_fcall_info_cache fcc = empty_fcall_info_cache;
 	php_uv_cb_t *cb;
 
 	ZEND_PARSE_PARAMETERS_START(3, 3)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_signal_ce)
-		Z_PARAM_FUNC(fci, fcc)
-		Z_PARAM_LONG(sig_num)
+	UV_PARAM_OBJ(uv, php_uv_t, uv_signal_ce)
+	Z_PARAM_FUNC(fci, fcc)
+	Z_PARAM_LONG(sig_num)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (uv_is_active((uv_handle_t *) &uv->uv.signal)) {
+	if (uv_is_active((uv_handle_t *)&uv->uv.signal))
+	{
 		php_error_docref(NULL, E_NOTICE, "passed uv signal resource has been started. you don't have to call this method");
 		RETURN_FALSE;
 	}
@@ -3687,27 +2880,27 @@ PHP_FUNCTION(uv_signal_start)
 
 	php_uv_cb_init(&cb, uv, &fci, &fcc, PHP_UV_SIGNAL_CB);
 
-	uv_signal_start((uv_signal_t *) &uv->uv.signal, php_uv_signal_cb, sig_num);
+	uv_signal_start((uv_signal_t *)&uv->uv.signal, php_uv_signal_cb, sig_num);
 }
 /* }}} */
 
-/* {{{ proto int uv_signal_stop(UVSignal $sig_handle)
-*/
+/* {{{ proto int uv_signal_stop(UVSignal $sig_handle) */
 PHP_FUNCTION(uv_signal_stop)
 {
 	php_uv_t *uv;
 	int r = 0;
 
 	ZEND_PARSE_PARAMETERS_START(1, 1)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_signal_ce)
+	UV_PARAM_OBJ(uv, php_uv_t, uv_signal_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!uv_is_active((uv_handle_t *) &uv->uv.signal)) {
+	if (!uv_is_active((uv_handle_t *)&uv->uv.signal))
+	{
 		php_error_docref(NULL, E_NOTICE, "passed uv signal resource has been stopped. you don't have to call this method");
 		RETURN_FALSE;
 	}
 
-	r = uv_signal_stop((uv_signal_t *) &uv->uv.signal);
+	r = uv_signal_stop((uv_signal_t *)&uv->uv.signal);
 
 	PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(uv_signal_stop, uv);
 	OBJ_RELEASE(&uv->std);
@@ -3716,8 +2909,7 @@ PHP_FUNCTION(uv_signal_stop)
 }
 /* }}} */
 
-/* {{{ proto void uv_loop_delete(UVLoop $uv_loop)
-*/
+/* {{{ proto void uv_loop_delete(UVLoop $uv_loop) */
 PHP_FUNCTION(uv_loop_delete)
 {
 	php_uv_loop_t *loop;
@@ -3726,19 +2918,15 @@ PHP_FUNCTION(uv_loop_delete)
 		UV_PARAM_OBJ(loop, php_uv_loop_t, uv_loop_ce)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (loop != UV_G(default_loop)) {
-#if PHP_VERSION_ID < 70300
-		GC_FLAGS(&loop->std) |= IS_OBJ_DESTRUCTOR_CALLED;
-#else
+	if (loop != UV_G(default_loop))
+	{
 		GC_ADD_FLAGS(&loop->std, IS_OBJ_DESTRUCTOR_CALLED);
-#endif
 		destruct_uv_loop(&loop->std);
 	}
 }
 /* }}} */
 
-/* {{{ proto long uv_now([UVLoop $uv_loop = uv_default_loop()])
-*/
+/* {{{ proto long uv_now([UVLoop $uv_loop = uv_default_loop()]) */
 PHP_FUNCTION(uv_now)
 {
 	php_uv_loop_t *loop = NULL;
@@ -3755,23 +2943,19 @@ PHP_FUNCTION(uv_now)
 }
 /* }}} */
 
-
-/* {{{ proto void uv_tcp_bind(UVTcp $uv_tcp, UVSockAddr $uv_sockaddr)
-*/
+/* {{{ proto void uv_tcp_bind(UVTcp $uv_tcp, UVSockAddr $uv_sockaddr) */
 PHP_FUNCTION(uv_tcp_bind)
 {
 	php_uv_socket_bind(PHP_UV_TCP_IPV4, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
 
-/* {{{ proto void uv_tcp_bind6(UVTcp $uv_tcp, UVSockAddr $uv_sockaddr)
-*/
+/* {{{ proto void uv_tcp_bind6(UVTcp $uv_tcp, UVSockAddr $uv_sockaddr) */
 PHP_FUNCTION(uv_tcp_bind6)
 {
 	php_uv_socket_bind(PHP_UV_TCP_IPV6, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-
 
 /* {{{ proto void uv_write(UVStream $handle, string $data[, callable(UVStream $handle, long $status) $callback = function() {}])
 */
@@ -3806,8 +2990,7 @@ PHP_FUNCTION(uv_write)
 }
 /* }}} */
 
-/* {{{ proto void uv_write2(UvStream $handle, string $data, UVTcp|UvPipe $send, callable(UVStream $handle, long $status) $callback)
-*/
+/* {{{ proto void uv_write2(UvStream $handle, string $data, UVTcp|UvPipe $send, callable(UVStream $handle, long $status) $callback)*/
 PHP_FUNCTION(uv_write2)
 {
 	zend_string *data;
@@ -3839,8 +3022,7 @@ PHP_FUNCTION(uv_write2)
 }
 /* }}} */
 
-/* {{{ proto void uv_tcp_nodelay(UVTcp $handle, bool $enable)
-*/
+/* {{{ proto void uv_tcp_nodelay(UVTcp $handle, bool $enable) */
 PHP_FUNCTION(uv_tcp_nodelay)
 {
 	php_uv_t *client;
@@ -3855,8 +3037,7 @@ PHP_FUNCTION(uv_tcp_nodelay)
 }
 /* }}} */
 
-/* {{{ proto void uv_accept<T = UVTcp|UVPipe>(T $server, T $client)
-*/
+/* {{{ proto void uv_accept<T = UVTcp|UVPipe>(T $server, T $client)*/
 PHP_FUNCTION(uv_accept)
 {
 	php_uv_t *server, *client;
@@ -3915,8 +3096,7 @@ PHP_FUNCTION(uv_shutdown)
 }
 /* }}} */
 
-/* {{{ proto void uv_close(UV $handle, callable(UV $handle) $callback)
-*/
+/* {{{ proto void uv_close(UV $handle, callable(UV $handle) $callback) */
 PHP_FUNCTION(uv_close)
 {
 	php_uv_t *uv;
@@ -3977,8 +3157,7 @@ PHP_FUNCTION(uv_read_start)
 }
 /* }}} */
 
-/* {{{ proto void uv_read_stop(UVStream $handle)
-*/
+/* {{{ proto void uv_read_stop(UVStream $handle) */
 PHP_FUNCTION(uv_read_stop)
 {
 	php_uv_t *uv;
@@ -3998,8 +3177,7 @@ PHP_FUNCTION(uv_read_stop)
 }
 /* }}} */
 
-/* {{{ proto UVSockAddrIPv4 uv_ip4_addr(string $ipv4_addr, long $port)
-*/
+/* {{{ proto UVSockAddrIPv4 uv_ip4_addr(string $ipv4_addr, long $port)*/
 PHP_FUNCTION(uv_ip4_addr)
 {
 	zend_string *address;
@@ -4018,8 +3196,7 @@ PHP_FUNCTION(uv_ip4_addr)
 }
 /* }}} */
 
-/* {{{ proto UVSockAddrIPv6 uv_ip6_addr(string $ipv6_addr, long $port)
-*/
+/* {{{ proto UVSockAddrIPv6 uv_ip6_addr(string $ipv6_addr, long $port) */
 PHP_FUNCTION(uv_ip6_addr)
 {
 	zend_string *address;
@@ -4329,12 +3506,14 @@ PHP_FUNCTION(uv_getaddrinfo)
 		Z_PARAM_ARRAY(hints)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (hints != NULL) {
+	if (hints != NULL)
+	{
 		HashTable *h;
 		zval *data;
 
 		h = Z_ARRVAL_P(hints);
-		if ((data = zend_hash_str_find(h, ZEND_STRL("ai_family")))) {
+		if ((data = zend_hash_str_find(h, ZEND_STRL("ai_family"))))
+		{
 			hint.ai_family = Z_LVAL_P(data);
 		}
 		if ((data = zend_hash_str_find(h, ZEND_STRL("ai_socktype")))) {
@@ -4348,10 +3527,10 @@ PHP_FUNCTION(uv_getaddrinfo)
 		}
 	}
 
-	PHP_UV_INIT_UV(uv, uv_addrinfo_ce);
+  PHP_UV_INIT_UV(uv, uv_addrinfo_ce);
 
-	php_uv_cb_init(&cb, uv, &fci, &fcc, PHP_UV_GETADDR_CB);
-	uv_getaddrinfo(&loop->loop, &uv->uv.addrinfo, php_uv_getaddrinfo_cb, node->val, service->val, &hint);
+  php_uv_cb_init(&cb, uv, &fci, &fcc, PHP_UV_GETADDR_CB);
+  uv_getaddrinfo(&loop->loop, &uv->uv.addrinfo, php_uv_getaddrinfo_cb, node->val, service->val, &hint);
 }
 /* }}} */
 
@@ -5718,7 +4897,6 @@ PHP_FUNCTION(uv_fs_open)
 }
 /* }}} */
 
-
 /* {{{ proto void uv_fs_read(UVLoop $loop, resource $fd, long $offset, long $length, callable(resource $fd, string|long $read) $callback)
 */
 PHP_FUNCTION(uv_fs_read)
@@ -5727,7 +4905,6 @@ PHP_FUNCTION(uv_fs_read)
 }
 /* }}} */
 
-
 /* {{{ proto void uv_fs_close(UVLoop $loop, resource $fd[, callable(bool $success) $callback])
 */
 PHP_FUNCTION(uv_fs_close)
@@ -5735,7 +4912,6 @@ PHP_FUNCTION(uv_fs_close)
 	php_uv_fs_common(UV_FS_CLOSE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-
 
 /* {{{ proto void uv_fs_write(UVLoop $loop, resource $fd, string $buffer[, long $offset = -1[, callable(resource $fd, long $result) $callback]])
 */
@@ -5776,7 +4952,6 @@ PHP_FUNCTION(uv_fs_mkdir)
 	php_uv_fs_common(UV_FS_MKDIR, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-
 
 /* {{{ proto void uv_fs_rmdir(UVLoop $loop, string $path[, callable(long $result) $callback])
 */
@@ -5826,7 +5001,6 @@ PHP_FUNCTION(uv_fs_chmod)
 }
 /* }}} */
 
-
 /* {{{ proto void uv_fs_fchmod(UVLoop $loop, zval $fd, long $mode[, callable(long $result) $callback])
 */
 PHP_FUNCTION(uv_fs_fchmod)
@@ -5834,7 +5008,6 @@ PHP_FUNCTION(uv_fs_fchmod)
 	php_uv_fs_common(UV_FS_FCHMOD, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-
 
 /* {{{ proto void uv_fs_chown(UVLoop $loop, string $path, long $uid, long $gid[, callable(long $result) $callback])
 */
@@ -5859,7 +5032,6 @@ PHP_FUNCTION(uv_fs_link)
 	php_uv_fs_common(UV_FS_LINK, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
-
 
 /* {{{ proto void uv_fs_symlink(UVLoop $loop, string $from, string $to, long $flags[, callable(long $result) $callback])
 */
@@ -5901,7 +5073,6 @@ PHP_FUNCTION(uv_fs_fstat)
 }
 /* }}} */
 
-
 /* {{{ proto void uv_fs_readdir(UVLoop $loop, string $path, callable(long|array $result_or_dir_contents) $callback[, long $flags = 0])
 */
 PHP_FUNCTION(uv_fs_readdir)
@@ -5919,16 +5090,14 @@ PHP_FUNCTION(uv_fs_scandir)
 }
 /* }}} */
 
-/* {{{ proto void uv_fs_sendfile(UVLoop $loop, resource $in_fd, resource $out_fd, long $offset, long $length[, callable(resource $out_fd, long $result) $callback])
-*/
+/* {{{ proto void uv_fs_sendfile(UVLoop $loop, resource $in_fd, resource $out_fd, long $offset, long $length[, callable(resource $out_fd, long $result) $callback]) */
 PHP_FUNCTION(uv_fs_sendfile)
 {
 	php_uv_fs_common(UV_FS_SENDFILE, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
 
-/* {{{ proto UVFsEvent uv_fs_event_init(UVLoop $loop, string $path, callable(UVFsEvent $handle, string|null $filename, long $events, long $status) $callback[, long $flags = 0])
-*/
+/* {{{ proto UVFsEvent uv_fs_event_init(UVLoop $loop, string $path, callable(UVFsEvent $handle, string|null $filename, long $events, long $status) $callback[, long $flags = 0]) */
 PHP_FUNCTION(uv_fs_event_init)
 {
 	int error;
@@ -5964,8 +5133,7 @@ PHP_FUNCTION(uv_fs_event_init)
 }
 /* }}} */
 
-/* {{{ proto UVTty uv_tty_init(UVLoop $loop, resource $fd, long $readable)
-*/
+/* {{{ proto UVTty uv_tty_init(UVLoop $loop, resource $fd, long $readable) */
 PHP_FUNCTION(uv_tty_init)
 {
 	zval *zstream;
@@ -5989,9 +5157,7 @@ PHP_FUNCTION(uv_tty_init)
 }
 /* }}} */
 
-
-/* {{{ proto long uv_tty_get_winsize(UVTty $tty, long &$width, long &$height)
-*/
+/* {{{ proto long uv_tty_get_winsize(UVTty $tty, long &$width, long &$height) */
 PHP_FUNCTION(uv_tty_get_winsize)
 {
 	php_uv_t *uv;
@@ -6016,9 +5182,7 @@ PHP_FUNCTION(uv_tty_get_winsize)
 }
 /* }}} */
 
-
-/* {{{ proto long uv_tty_set_mode(UVTty $tty, long $mode)
-*/
+/* {{{ proto long uv_tty_set_mode(UVTty $tty, long $mode) */
 PHP_FUNCTION(uv_tty_set_mode)
 {
 	php_uv_t *uv;
@@ -6034,8 +5198,7 @@ PHP_FUNCTION(uv_tty_set_mode)
 }
 /* }}} */
 
-/* {{{ proto void uv_tty_reset_mode(void)
-*/
+/* {{{ proto void uv_tty_reset_mode(void) */
 PHP_FUNCTION(uv_tty_reset_mode)
 {
 	if (zend_parse_parameters_none() == FAILURE) {
@@ -6046,8 +5209,7 @@ PHP_FUNCTION(uv_tty_reset_mode)
 }
 /* }}} */
 
-/* {{{ proto void uv_tcp_simultaneous_accepts(UVTcp $handle, bool $enable)
- */
+/* {{{ proto void uv_tcp_simultaneous_accepts(UVTcp $handle, bool $enable) */
 PHP_FUNCTION(uv_tcp_simultaneous_accepts)
 {
 	php_uv_t *uv;
@@ -6064,16 +5226,14 @@ PHP_FUNCTION(uv_tcp_simultaneous_accepts)
 }
 /* }}} */
 
-/* {{{ proto string uv_tcp_getsockname(UVTcp $uv_sock)
-*/
+/* {{{ proto string uv_tcp_getsockname(UVTcp $uv_sock) */
 PHP_FUNCTION(uv_tcp_getsockname)
 {
 	php_uv_socket_getname(1, INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 /* }}} */
 
-/* {{{ proto string uv_tcp_getpeername(UVTcp $uv_sock)
-*/
+/* {{{ proto string uv_tcp_getpeername(UVTcp $uv_sock) */
 PHP_FUNCTION(uv_tcp_getpeername)
 {
 	php_uv_socket_getname(2, INTERNAL_FUNCTION_PARAM_PASSTHRU);
@@ -6137,11 +5297,7 @@ PHP_FUNCTION(uv_poll_init)
 
 	PHP_UV_FETCH_UV_DEFAULT_LOOP(loop);
 	fd = php_uv_zval_to_valid_poll_fd(zstream);
-#ifdef PHP_WIN32
-	PHP_UV_INIT_UV_EX(uv, uv_poll_ce, uv_poll_init_socket, (uv_os_sock_t) fd);
-#else
 	PHP_UV_INIT_UV_EX(uv, uv_poll_ce, uv_poll_init, fd);
-#endif
 	PHP_UV_CHECK_VALID_FD(fd, zstream);
 
 	uv->sock = fd;
@@ -6276,203 +5432,199 @@ PHP_FUNCTION(uv_fs_poll_stop)
 }
 /* }}} */
 
-
-
-
 static zend_function_entry uv_functions[] = {
 	/* general */
-	PHP_FE(uv_update_time,              arginfo_uv_update_time)
-	PHP_FE(uv_ref,                      arginfo_uv_ref)
-	PHP_FE(uv_unref,                    arginfo_uv_unref)
-	PHP_FE(uv_loop_new,                 arginfo_void)
-	PHP_FE(uv_default_loop,             arginfo_void)
-	PHP_FE(uv_stop,                     arginfo_uv_stop)
-	PHP_FE(uv_run,                      arginfo_uv_run)
-	PHP_FE(uv_ip4_addr,                 arginfo_uv_ip4_addr)
-	PHP_FE(uv_ip6_addr,                 arginfo_uv_ip6_addr)
-	PHP_FE(uv_ip4_name,                 arginfo_uv_ip4_name)
-	PHP_FE(uv_ip6_name,                 arginfo_uv_ip6_name)
-	PHP_FE(uv_write,                    arginfo_uv_write)
-	PHP_FE(uv_write2,                   arginfo_uv_write2)
-	PHP_FE(uv_shutdown,                 arginfo_uv_shutdown)
-	PHP_FE(uv_close,                    arginfo_uv_close)
-	PHP_FE(uv_now,                      arginfo_uv_now)
-	PHP_FE(uv_loop_delete,              arginfo_uv_loop_delete)
-	PHP_FE(uv_read_start,               arginfo_uv_read_start)
-	PHP_FE(uv_read_stop,                arginfo_uv_read_stop)
-	PHP_FE(uv_err_name,                 arginfo_uv_err_name)
-	PHP_FE(uv_strerror,                 arginfo_uv_strerror)
-	PHP_FE(uv_is_active,                arginfo_uv_is_active)
-	PHP_FE(uv_is_closing,               arginfo_uv_is_closing)
-	PHP_FE(uv_is_readable,              arginfo_uv_is_readable)
-	PHP_FE(uv_is_writable,              arginfo_uv_is_writable)
-	PHP_FE(uv_walk,                     arginfo_uv_walk)
-	PHP_FE(uv_guess_handle,             arginfo_uv_guess_handle)
+	PHP_FE(uv_update_time, arginfo_uv_update_time)
+		PHP_FE(uv_ref, arginfo_uv_ref)
+			PHP_FE(uv_unref, arginfo_uv_unref)
+				PHP_FE(uv_loop_new, arginfo_void)
+					PHP_FE(uv_default_loop, arginfo_void)
+						PHP_FE(uv_stop, arginfo_uv_stop)
+							PHP_FE(uv_run, arginfo_uv_run)
+								PHP_FE(uv_ip4_addr, arginfo_uv_ip4_addr)
+									PHP_FE(uv_ip6_addr, arginfo_uv_ip6_addr)
+										PHP_FE(uv_ip4_name, arginfo_uv_ip4_name)
+											PHP_FE(uv_ip6_name, arginfo_uv_ip6_name)
+												PHP_FE(uv_write, arginfo_uv_write)
+													PHP_FE(uv_write2, arginfo_uv_write2)
+														PHP_FE(uv_shutdown, arginfo_uv_shutdown)
+															PHP_FE(uv_close, arginfo_uv_close)
+																PHP_FE(uv_now, arginfo_uv_now)
+																	PHP_FE(uv_loop_delete, arginfo_uv_loop_delete)
+																		PHP_FE(uv_read_start, arginfo_uv_read_start)
+																			PHP_FE(uv_read_stop, arginfo_uv_read_stop)
+																				PHP_FE(uv_err_name, arginfo_uv_err_name)
+																					PHP_FE(uv_strerror, arginfo_uv_strerror)
+																						PHP_FE(uv_is_active, arginfo_uv_is_active)
+																							PHP_FE(uv_is_closing, arginfo_uv_is_closing)
+																								PHP_FE(uv_is_readable, arginfo_uv_is_readable)
+																									PHP_FE(uv_is_writable, arginfo_uv_is_writable)
+																										PHP_FE(uv_walk, arginfo_uv_walk)
+																											PHP_FE(uv_guess_handle, arginfo_uv_guess_handle)
 	/* idle */
-	PHP_FE(uv_idle_init,                arginfo_uv_idle_init)
-	PHP_FE(uv_idle_start,               arginfo_uv_idle_start)
-	PHP_FE(uv_idle_stop,                arginfo_uv_idle_stop)
+	PHP_FE(uv_idle_init, arginfo_uv_idle_init)
+		PHP_FE(uv_idle_start, arginfo_uv_idle_start)
+			PHP_FE(uv_idle_stop, arginfo_uv_idle_stop)
 	/* timer */
-	PHP_FE(uv_timer_init,               arginfo_uv_timer_init)
-	PHP_FE(uv_timer_start,              arginfo_uv_timer_start)
-	PHP_FE(uv_timer_stop,               arginfo_uv_timer_stop)
-	PHP_FE(uv_timer_again,              arginfo_uv_timer_again)
-	PHP_FE(uv_timer_set_repeat,         arginfo_uv_timer_set_repeat)
-	PHP_FE(uv_timer_get_repeat,         arginfo_uv_timer_get_repeat)
+	PHP_FE(uv_timer_init, arginfo_uv_timer_init)
+		PHP_FE(uv_timer_start, arginfo_uv_timer_start)
+			PHP_FE(uv_timer_stop, arginfo_uv_timer_stop)
+				PHP_FE(uv_timer_again, arginfo_uv_timer_again)
+					PHP_FE(uv_timer_set_repeat, arginfo_uv_timer_set_repeat)
+						PHP_FE(uv_timer_get_repeat, arginfo_uv_timer_get_repeat)
 	/* tcp */
-	PHP_FE(uv_tcp_init,                 arginfo_uv_tcp_init)
-	PHP_FE(uv_tcp_open,                 arginfo_uv_tcp_open)
-	PHP_FE(uv_tcp_nodelay,              arginfo_uv_tcp_nodelay)
-	PHP_FE(uv_tcp_bind,                 arginfo_uv_tcp_bind)
-	PHP_FE(uv_tcp_bind6,                arginfo_uv_tcp_bind6)
-	PHP_FE(uv_listen,                   arginfo_uv_listen)
-	PHP_FE(uv_accept,                   arginfo_uv_accept)
-	PHP_FE(uv_tcp_connect,              arginfo_uv_tcp_connect)
-	PHP_FE(uv_tcp_connect6,             arginfo_uv_tcp_connect6)
+	PHP_FE(uv_tcp_init, arginfo_uv_tcp_init)
+		PHP_FE(uv_tcp_open, arginfo_uv_tcp_open)
+			PHP_FE(uv_tcp_nodelay, arginfo_uv_tcp_nodelay)
+				PHP_FE(uv_tcp_bind, arginfo_uv_tcp_bind)
+					PHP_FE(uv_tcp_bind6, arginfo_uv_tcp_bind6)
+						PHP_FE(uv_listen, arginfo_uv_listen)
+							PHP_FE(uv_accept, arginfo_uv_accept)
+								PHP_FE(uv_tcp_connect, arginfo_uv_tcp_connect)
+									PHP_FE(uv_tcp_connect6, arginfo_uv_tcp_connect6)
 	/* udp */
-	PHP_FE(uv_udp_init,                 arginfo_uv_udp_init)
-	PHP_FE(uv_udp_open,                 arginfo_uv_udp_open)
-	PHP_FE(uv_udp_bind,                 arginfo_uv_udp_bind)
-	PHP_FE(uv_udp_bind6,                arginfo_uv_udp_bind6)
-	PHP_FE(uv_udp_set_multicast_loop,   arginfo_uv_udp_set_multicast_loop)
-	PHP_FE(uv_udp_set_multicast_ttl,    arginfo_uv_udp_set_multicast_ttl)
-	PHP_FE(uv_udp_send,                 arginfo_uv_udp_send)
-	PHP_FE(uv_udp_send6,                arginfo_uv_udp_send6)
-	PHP_FE(uv_udp_recv_start,           arginfo_uv_udp_recv_start)
-	PHP_FE(uv_udp_recv_stop,            arginfo_uv_udp_recv_stop)
-	PHP_FE(uv_udp_set_membership,       arginfo_uv_udp_set_membership)
-	PHP_FE(uv_udp_set_broadcast,        arginfo_uv_udp_set_broadcast)
+	PHP_FE(uv_udp_init, arginfo_uv_udp_init)
+		PHP_FE(uv_udp_open, arginfo_uv_udp_open)
+			PHP_FE(uv_udp_bind, arginfo_uv_udp_bind)
+				PHP_FE(uv_udp_bind6, arginfo_uv_udp_bind6)
+					PHP_FE(uv_udp_set_multicast_loop, arginfo_uv_udp_set_multicast_loop)
+						PHP_FE(uv_udp_set_multicast_ttl, arginfo_uv_udp_set_multicast_ttl)
+							PHP_FE(uv_udp_send, arginfo_uv_udp_send)
+								PHP_FE(uv_udp_send6, arginfo_uv_udp_send6)
+									PHP_FE(uv_udp_recv_start, arginfo_uv_udp_recv_start)
+										PHP_FE(uv_udp_recv_stop, arginfo_uv_udp_recv_stop)
+											PHP_FE(uv_udp_set_membership, arginfo_uv_udp_set_membership)
+												PHP_FE(uv_udp_set_broadcast, arginfo_uv_udp_set_broadcast)
 	/* poll */
-	PHP_FE(uv_poll_init,                arginfo_uv_poll_init)
-	PHP_FALIAS(uv_poll_init_socket,     uv_poll_init,  arginfo_uv_poll_init)
-	PHP_FE(uv_poll_start,               arginfo_uv_poll_start)
-	PHP_FE(uv_poll_stop,                arginfo_uv_poll_stop)
-	PHP_FE(uv_fs_poll_init,             arginfo_uv_fs_poll_init)
-	PHP_FE(uv_fs_poll_start,            arginfo_uv_fs_poll_start)
-	PHP_FE(uv_fs_poll_stop,             arginfo_uv_fs_poll_stop)
+	PHP_FE(uv_poll_init, arginfo_uv_poll_init)
+		PHP_FALIAS(uv_poll_init_socket, uv_poll_init, arginfo_uv_poll_init)
+			PHP_FE(uv_poll_start, arginfo_uv_poll_start)
+				PHP_FE(uv_poll_stop, arginfo_uv_poll_stop)
+					PHP_FE(uv_fs_poll_init, arginfo_uv_fs_poll_init)
+						PHP_FE(uv_fs_poll_start, arginfo_uv_fs_poll_start)
+							PHP_FE(uv_fs_poll_stop, arginfo_uv_fs_poll_stop)
 	/* other network functions */
-	PHP_FE(uv_tcp_getsockname,          arginfo_uv_tcp_getsockname)
-	PHP_FE(uv_tcp_getpeername,          arginfo_uv_tcp_getpeername)
-	PHP_FE(uv_udp_getsockname,          arginfo_uv_udp_getsockname)
-	PHP_FE(uv_tcp_simultaneous_accepts, arginfo_uv_tcp_simultaneous_accepts)
+	PHP_FE(uv_tcp_getsockname, arginfo_uv_tcp_getsockname)
+		PHP_FE(uv_tcp_getpeername, arginfo_uv_tcp_getpeername)
+			PHP_FE(uv_udp_getsockname, arginfo_uv_udp_getsockname)
+				PHP_FE(uv_tcp_simultaneous_accepts, arginfo_uv_tcp_simultaneous_accepts)
 	/* pipe */
-	PHP_FE(uv_pipe_init,                arginfo_uv_pipe_init)
-	PHP_FE(uv_pipe_bind,                arginfo_uv_pipe_bind)
-	PHP_FE(uv_pipe_open,                arginfo_uv_pipe_open)
-	PHP_FE(uv_pipe_connect,             arginfo_uv_pipe_connect)
-	PHP_FE(uv_pipe_pending_instances,   arginfo_uv_pipe_pending_instances)
-	PHP_FE(uv_pipe_pending_count,       arginfo_uv_pipe_pending_count)
-	PHP_FE(uv_pipe_pending_type,        arginfo_uv_pipe_pending_type)
-	PHP_FE(uv_stdio_new,                arginfo_void)
+	PHP_FE(uv_pipe_init, arginfo_uv_pipe_init)
+		PHP_FE(uv_pipe_bind, arginfo_uv_pipe_bind)
+			PHP_FE(uv_pipe_open, arginfo_uv_pipe_open)
+				PHP_FE(uv_pipe_connect, arginfo_uv_pipe_connect)
+					PHP_FE(uv_pipe_pending_instances, arginfo_uv_pipe_pending_instances)
+						PHP_FE(uv_pipe_pending_count, arginfo_uv_pipe_pending_count)
+							PHP_FE(uv_pipe_pending_type, arginfo_uv_pipe_pending_type)
+								PHP_FE(uv_stdio_new, arginfo_void)
 	/* spawn */
-	PHP_FE(uv_spawn,                    arginfo_uv_spawn)
-	PHP_FE(uv_process_kill,             arginfo_uv_process_kill)
-	PHP_FE(uv_process_get_pid,          arginfo_uv_process_get_pid)
-	PHP_FE(uv_kill,                     arginfo_uv_kill)
+	PHP_FE(uv_spawn, arginfo_uv_spawn)
+		PHP_FE(uv_process_kill, arginfo_uv_process_kill)
+			PHP_FE(uv_process_get_pid, arginfo_uv_process_get_pid)
+				PHP_FE(uv_kill, arginfo_uv_kill)
 	/* c-ares */
-	PHP_FE(uv_getaddrinfo,              arginfo_uv_getaddrinfo)
+	PHP_FE(uv_getaddrinfo, arginfo_uv_getaddrinfo)
 	/* rwlock */
-	PHP_FE(uv_rwlock_init,              arginfo_void)
-	PHP_FE(uv_rwlock_rdlock,            arginfo_uv_rwlock_rdlock)
-	PHP_FE(uv_rwlock_tryrdlock,         arginfo_uv_rwlock_tryrdlock)
-	PHP_FE(uv_rwlock_rdunlock,          arginfo_uv_rwlock_rdunlock)
-	PHP_FE(uv_rwlock_wrlock,            arginfo_uv_rwlock_wrlock)
-	PHP_FE(uv_rwlock_trywrlock,         arginfo_uv_rwlock_trywrlock)
-	PHP_FE(uv_rwlock_wrunlock,          arginfo_uv_rwlock_wrunlock)
+	PHP_FE(uv_rwlock_init, arginfo_void)
+		PHP_FE(uv_rwlock_rdlock, arginfo_uv_rwlock_rdlock)
+			PHP_FE(uv_rwlock_tryrdlock, arginfo_uv_rwlock_tryrdlock)
+				PHP_FE(uv_rwlock_rdunlock, arginfo_uv_rwlock_rdunlock)
+					PHP_FE(uv_rwlock_wrlock, arginfo_uv_rwlock_wrlock)
+						PHP_FE(uv_rwlock_trywrlock, arginfo_uv_rwlock_trywrlock)
+							PHP_FE(uv_rwlock_wrunlock, arginfo_uv_rwlock_wrunlock)
 	/* mutex */
-	PHP_FE(uv_mutex_init,               arginfo_void)
-	PHP_FE(uv_mutex_lock,               arginfo_uv_mutex_lock)
-	PHP_FE(uv_mutex_trylock,            arginfo_uv_mutex_trylock)
-	PHP_FE(uv_mutex_unlock,             arginfo_uv_mutex_unlock)
+	PHP_FE(uv_mutex_init, arginfo_void)
+		PHP_FE(uv_mutex_lock, arginfo_uv_mutex_lock)
+			PHP_FE(uv_mutex_trylock, arginfo_uv_mutex_trylock)
+				PHP_FE(uv_mutex_unlock, arginfo_uv_mutex_unlock)
 	/* semaphore */
-	PHP_FE(uv_sem_init,                 arginfo_uv_sem_init)
-	PHP_FE(uv_sem_post,                 arginfo_uv_sem_post)
-	PHP_FE(uv_sem_wait,                 arginfo_uv_sem_wait)
-	PHP_FE(uv_sem_trywait,              arginfo_uv_sem_trywait)
+	PHP_FE(uv_sem_init, arginfo_uv_sem_init)
+		PHP_FE(uv_sem_post, arginfo_uv_sem_post)
+			PHP_FE(uv_sem_wait, arginfo_uv_sem_wait)
+				PHP_FE(uv_sem_trywait, arginfo_uv_sem_trywait)
 	/* prepare (before poll hook) */
-	PHP_FE(uv_prepare_init,             arginfo_uv_prepare_init)
-	PHP_FE(uv_prepare_start,            arginfo_uv_prepare_start)
-	PHP_FE(uv_prepare_stop,             arginfo_uv_prepare_stop)
+	PHP_FE(uv_prepare_init, arginfo_uv_prepare_init)
+		PHP_FE(uv_prepare_start, arginfo_uv_prepare_start)
+			PHP_FE(uv_prepare_stop, arginfo_uv_prepare_stop)
 	/* check (after poll hook) */
-	PHP_FE(uv_check_init,               arginfo_uv_check_init)
-	PHP_FE(uv_check_start,              arginfo_uv_check_start)
-	PHP_FE(uv_check_stop,               arginfo_uv_check_stop)
+	PHP_FE(uv_check_init, arginfo_uv_check_init)
+		PHP_FE(uv_check_start, arginfo_uv_check_start)
+			PHP_FE(uv_check_stop, arginfo_uv_check_stop)
 	/* async */
-	PHP_FE(uv_async_init,               arginfo_uv_async_init)
-	PHP_FE(uv_async_send,               arginfo_uv_async_send)
-	/* queue (does not work yet) */
+	PHP_FE(uv_async_init, arginfo_uv_async_init)
+		PHP_FE(uv_async_send, arginfo_uv_async_send)
+/* queue (does not work yet) */
 #if PHP_VERSION_ID < 80000
-	PHP_FE(uv_queue_work,               NULL)
+			PHP_FE(uv_queue_work, NULL)
 #endif
 	/* fs */
-	PHP_FE(uv_fs_open,                  arginfo_uv_fs_open)
-	PHP_FE(uv_fs_read,                  arginfo_uv_fs_read)
-	PHP_FE(uv_fs_write,                 arginfo_uv_fs_write)
-	PHP_FE(uv_fs_close,                 arginfo_uv_fs_close)
-	PHP_FE(uv_fs_fsync,                 arginfo_uv_fs_fsync)
-	PHP_FE(uv_fs_fdatasync,             arginfo_uv_fs_fdatasync)
-	PHP_FE(uv_fs_ftruncate,             arginfo_uv_fs_ftruncate)
-	PHP_FE(uv_fs_mkdir,                 arginfo_uv_fs_mkdir)
-	PHP_FE(uv_fs_rmdir,                 arginfo_uv_fs_rmdir)
-	PHP_FE(uv_fs_unlink,                arginfo_uv_fs_unlink)
-	PHP_FE(uv_fs_rename,                arginfo_uv_fs_rename)
-	PHP_FE(uv_fs_utime,                 arginfo_uv_fs_utime)
-	PHP_FE(uv_fs_futime,                arginfo_uv_fs_futime)
-	PHP_FE(uv_fs_chmod,                 arginfo_uv_fs_chmod)
-	PHP_FE(uv_fs_fchmod,                arginfo_uv_fs_fchmod)
-	PHP_FE(uv_fs_chown,                 arginfo_uv_fs_chown)
-	PHP_FE(uv_fs_fchown,                arginfo_uv_fs_fchown)
-	PHP_FE(uv_fs_link,                  arginfo_uv_fs_link)
-	PHP_FE(uv_fs_symlink,               arginfo_uv_fs_symlink)
-	PHP_FE(uv_fs_readlink,              arginfo_uv_fs_readlink)
-	PHP_FE(uv_fs_stat,                  arginfo_uv_fs_stat)
-	PHP_FE(uv_fs_lstat,                 arginfo_uv_fs_lstat)
-	PHP_FE(uv_fs_fstat,                 arginfo_uv_fs_fstat)
-	PHP_FE(uv_fs_readdir,               arginfo_uv_fs_readdir)
-	PHP_FE(uv_fs_scandir,               arginfo_uv_fs_scandir)
-	PHP_FE(uv_fs_sendfile,              arginfo_uv_fs_sendfile)
-	PHP_FE(uv_fs_event_init,            arginfo_uv_fs_event_init)
+	PHP_FE(uv_fs_open, arginfo_uv_fs_open)
+		PHP_FE(uv_fs_read, arginfo_uv_fs_read)
+			PHP_FE(uv_fs_write, arginfo_uv_fs_write)
+				PHP_FE(uv_fs_close, arginfo_uv_fs_close)
+					PHP_FE(uv_fs_fsync, arginfo_uv_fs_fsync)
+						PHP_FE(uv_fs_fdatasync, arginfo_uv_fs_fdatasync)
+							PHP_FE(uv_fs_ftruncate, arginfo_uv_fs_ftruncate)
+								PHP_FE(uv_fs_mkdir, arginfo_uv_fs_mkdir)
+									PHP_FE(uv_fs_rmdir, arginfo_uv_fs_rmdir)
+										PHP_FE(uv_fs_unlink, arginfo_uv_fs_unlink)
+											PHP_FE(uv_fs_rename, arginfo_uv_fs_rename)
+												PHP_FE(uv_fs_utime, arginfo_uv_fs_utime)
+													PHP_FE(uv_fs_futime, arginfo_uv_fs_futime)
+														PHP_FE(uv_fs_chmod, arginfo_uv_fs_chmod)
+															PHP_FE(uv_fs_fchmod, arginfo_uv_fs_fchmod)
+																PHP_FE(uv_fs_chown, arginfo_uv_fs_chown)
+																	PHP_FE(uv_fs_fchown, arginfo_uv_fs_fchown)
+																		PHP_FE(uv_fs_link, arginfo_uv_fs_link)
+																			PHP_FE(uv_fs_symlink, arginfo_uv_fs_symlink)
+																				PHP_FE(uv_fs_readlink, arginfo_uv_fs_readlink)
+																					PHP_FE(uv_fs_stat, arginfo_uv_fs_stat)
+																						PHP_FE(uv_fs_lstat, arginfo_uv_fs_lstat)
+																							PHP_FE(uv_fs_fstat, arginfo_uv_fs_fstat)
+																								PHP_FE(uv_fs_readdir, arginfo_uv_fs_readdir)
+																									PHP_FE(uv_fs_scandir, arginfo_uv_fs_scandir)
+																										PHP_FE(uv_fs_sendfile, arginfo_uv_fs_sendfile)
+																											PHP_FE(uv_fs_event_init, arginfo_uv_fs_event_init)
 	/* tty */
-	PHP_FE(uv_tty_init,                 arginfo_uv_tty_init)
-	PHP_FE(uv_tty_get_winsize,          arginfo_uv_tty_get_winsize)
-	PHP_FE(uv_tty_set_mode,             arginfo_void)
-	PHP_FE(uv_tty_reset_mode,           arginfo_void)
+	PHP_FE(uv_tty_init, arginfo_uv_tty_init)
+		PHP_FE(uv_tty_get_winsize, arginfo_uv_tty_get_winsize)
+			PHP_FE(uv_tty_set_mode, arginfo_void)
+				PHP_FE(uv_tty_reset_mode, arginfo_void)
 	/* info */
-	PHP_FE(uv_loadavg,                  arginfo_void)
-	PHP_FE(uv_uptime,                   arginfo_void)
-	PHP_FE(uv_cpu_info,                 arginfo_void)
-	PHP_FE(uv_interface_addresses,      arginfo_void)
-	PHP_FE(uv_get_free_memory,          arginfo_void)
-	PHP_FE(uv_get_total_memory,         arginfo_void)
-	PHP_FE(uv_hrtime,                   arginfo_void)
-	PHP_FE(uv_exepath,                  arginfo_void)
-	PHP_FE(uv_cwd,                      arginfo_void)
-	PHP_FE(uv_chdir,                    arginfo_uv_chdir)
-	PHP_FE(uv_resident_set_memory,      arginfo_void)
+	PHP_FE(uv_loadavg, arginfo_void)
+		PHP_FE(uv_uptime, arginfo_void)
+			PHP_FE(uv_cpu_info, arginfo_void)
+				PHP_FE(uv_interface_addresses, arginfo_void)
+					PHP_FE(uv_get_free_memory, arginfo_void)
+						PHP_FE(uv_get_total_memory, arginfo_void)
+							PHP_FE(uv_hrtime, arginfo_void)
+								PHP_FE(uv_exepath, arginfo_void)
+									PHP_FE(uv_cwd, arginfo_void)
+										PHP_FE(uv_chdir, arginfo_uv_chdir)
+											PHP_FE(uv_resident_set_memory, arginfo_void)
 	/* signal handling */
-	PHP_FE(uv_signal_init,              arginfo_uv_signal_init)
-	PHP_FE(uv_signal_start,             arginfo_uv_signal_start)
-	PHP_FE(uv_signal_stop,              arginfo_uv_signal_stop)
-	{0}
+	PHP_FE(uv_signal_init, arginfo_uv_signal_init)
+		PHP_FE(uv_signal_start, arginfo_uv_signal_start)
+			PHP_FE(uv_signal_stop, arginfo_uv_signal_stop){0}
 };
 
 PHP_MINFO_FUNCTION(uv)
 {
 	char uv_version[20];
 
-	sprintf(uv_version, "%d.%d",UV_VERSION_MAJOR, UV_VERSION_MINOR);
+	sprintf(uv_version, "%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR);
 
 	php_printf("PHP libuv Extension\n");
 	php_info_print_table_start();
-	php_info_print_table_header(2,"libuv Support",  "enabled");
-	php_info_print_table_row(2,"Version", PHP_UV_VERSION);
-	php_info_print_table_row(2,"libuv Version", uv_version);
+	php_info_print_table_header(2, "libuv Support", "enabled");
+	php_info_print_table_row(2, "Version", PHP_UV_VERSION);
+	php_info_print_table_row(2, "libuv Version", uv_version);
 	php_info_print_table_end();
 }
 
 static PHP_GINIT_FUNCTION(uv)
 {
-#if defined(COMPILE_DL_UV) && defined(ZTS)
+#ifdef ZTS
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 	uv_globals->default_loop = NULL;
@@ -6480,22 +5632,25 @@ static PHP_GINIT_FUNCTION(uv)
 
 zend_module_entry uv_module_entry = {
 	STANDARD_MODULE_HEADER,
-	"uv",
-	uv_functions,					/* Functions */
-	PHP_MINIT(uv),	/* MINIT */
-	NULL,					/* MSHUTDOWN */
-	NULL,					/* RINIT */
-	PHP_RSHUTDOWN(uv),		/* RSHUTDOWN */
-	PHP_MINFO(uv),	/* MINFO */
+	PHP_UV_EXTNAME,
+	uv_functions,	   /* Functions */
+	PHP_MINIT(uv),	   /* MINIT */
+	NULL,			   /* MSHUTDOWN */
+	NULL,			   /* RINIT */
+	PHP_RSHUTDOWN(uv), /* RSHUTDOWN */
+	PHP_MINFO(uv),	   /* MINFO */
 	PHP_UV_VERSION,
 	PHP_MODULE_GLOBALS(uv),
 	PHP_GINIT(uv),
 	NULL,
 	NULL,
-	STANDARD_MODULE_PROPERTIES_EX
-};
+	STANDARD_MODULE_PROPERTIES_EX};
 
+BEGIN_EXTERN_C()
 
-#ifdef COMPILE_DL_UV
-ZEND_GET_MODULE(uv)
-#endif
+zend_module_entry *get_module()
+{
+	return &uv_module_entry;
+}
+
+END_EXTERN_C()

@@ -11,6 +11,22 @@ PHP_ARG_ENABLE(libuv-static, for uv debug support,
 PHP_ARG_ENABLE(dtrace, Whether to enable the "dtrace" debug,
     [ --enable-dtrace         Enable "dtrace" support], no, no)
 
+AC_MSG_CHECKING([for supported PHP version])
+
+if test -z "$PHP_VERSION"; then
+  if test -z "$PHP_CONFIG"; then
+    AC_MSG_ERROR([php-config not found])
+  fi
+  PHP_UV_FOUND_PHP_VERSION=`$PHP_CONFIG --version`
+else
+  PHP_UV_FOUND_PHP_VERSION="$PHP_VERSION"
+fi
+
+if test "$PHP_UV_FOUND_PHP_VERSION" -lt "80000"; then
+  AC_MSG_ERROR([not supported. PHP version 8.0.0+ required (found $PHP_UV_FOUND_PHP_VERSION)])
+else
+  AC_MSG_RESULT([supported ($PHP_UV_FOUND_PHP_VERSION)])
+fi
 
 if test -z "$PHP_DEBUG"; then
     AC_ARG_ENABLE(debug,
@@ -106,5 +122,6 @@ if test $PHP_UV != "no"; then
 
   PHP_NEW_EXTENSION(uv, php_uv.c uv.c, $ext_shared)
   PHP_ADD_INCLUDE(./include)
-  PHP_ADD_EXTENSION_DEP(uv, sockets, true)
+  PHP_INSTALL_HEADERS([ext/uv], [php_uv.h])
+  PHP_ADD_EXTENSION_DEP(uv, sockets, false)
 fi

@@ -1,16 +1,10 @@
-#ifndef PHP_UV_H
-#define PHP_UV_H
+#pragma once
 
 #define PHP_UV_EXTNAME "uv"
 #define PHP_UV_VERSION "0.3.0"
 
-#include <config.h>
-
-#ifdef PHP_WIN32
-#include <Winsock2.h>
-#include <Mswsock.h>
-#include <psapi.h>
-#include <Iphlpapi.h>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
 #endif
 
 #ifndef PHP_UV_DTRACE
@@ -20,29 +14,18 @@
 #if PHP_UV_DTRACE >= 1
 #include <dtrace.h>
 #include <sys/sdt.h>
+
 #include "phpuv_dtrace.h"
+
 #define PHP_UV_PROBE(PROBE) PHPUV_TRACE_##PROBE();
 #else
 #define PHP_UV_PROBE(PROBE)
 #endif
 
 #include <php.h>
-#include <uv.h>
 
-#include <php_network.h>
-#include <php_streams.h>
-
-#if defined(HAVE_SOCKETS) && !defined(COMPILE_DL_SOCKETS)
-#include "ext/sockets/php_sockets.h"
-#elif !defined(PHP_WIN32)
-typedef struct {
-	int bsd_socket;
-	int type;
-	int error;
-	int blocking;
-	zval zstream;
-	zend_object std;
-} php_socket;
+#if PHP_VERSION_ID < 80000
+#error PHP 8.0.0 or later is required in order to build the extension
 #endif
 
 #include <Zend/zend.h>
@@ -56,6 +39,16 @@ typedef struct {
 #include <Zend/zend_object_handlers.h>
 #include <Zend/zend_variables.h>
 #include <Zend/zend_vm.h>
+#include <php_network.h>
+#include <php_streams.h>
+
+#ifndef HAVE_SOCKETS
+#error "PHP must be compiled with SOCKETS support"
+#endif
+
+#include <uv.h>
+
+#include <ext/sockets/php_sockets.h>
 
 #if PHP_VERSION_ID >= 80000
 #define TSRMLS_C
@@ -74,7 +67,8 @@ extern zend_module_entry uv_module_entry;
 
 extern zend_class_entry *uv_class_entry;
 
-enum php_uv_lock_type {
+enum php_uv_lock_type
+{
 	IS_UV_RWLOCK = 1,
 	IS_UV_RWLOCK_RD = 2,
 	IS_UV_RWLOCK_WR = 3,
@@ -82,72 +76,71 @@ enum php_uv_lock_type {
 	IS_UV_SEMAPHORE = 5,
 };
 
-enum php_uv_resource_type{
-	IS_UV_TCP      = 0,
-	IS_UV_UDP      = 1,
-	IS_UV_PIPE     = 2,
-	IS_UV_IDLE     = 3,
-	IS_UV_TIMER    = 4,
-	IS_UV_ASYNC    = 5,
-	IS_UV_LOOP     = 6,
-	IS_UV_HANDLE   = 7,
-	IS_UV_STREAM   = 8,
+enum php_uv_resource_type
+{
+	IS_UV_TCP = 0,
+	IS_UV_UDP = 1,
+	IS_UV_PIPE = 2,
+	IS_UV_IDLE = 3,
+	IS_UV_TIMER = 4,
+	IS_UV_ASYNC = 5,
+	IS_UV_LOOP = 6,
+	IS_UV_HANDLE = 7,
+	IS_UV_STREAM = 8,
 	IS_UV_ADDRINFO = 9,
-	IS_UV_PROCESS  = 10,
-	IS_UV_PREPARE  = 11,
-	IS_UV_CHECK    = 12,
-	IS_UV_WORK     = 13,
-	IS_UV_FS       = 14,
+	IS_UV_PROCESS = 10,
+	IS_UV_PREPARE = 11,
+	IS_UV_CHECK = 12,
+	IS_UV_WORK = 13,
+	IS_UV_FS = 14,
 	IS_UV_FS_EVENT = 15,
-	IS_UV_TTY      = 16,
-	IS_UV_FS_POLL  = 17,
-	IS_UV_POLL     = 18,
-	IS_UV_SIGNAL   = 19,
-	IS_UV_MAX      = 20
+	IS_UV_TTY = 16,
+	IS_UV_FS_POLL = 17,
+	IS_UV_POLL = 18,
+	IS_UV_SIGNAL = 19,
+	IS_UV_MAX = 20
 };
 
-enum php_uv_callback_type{
-	PHP_UV_LISTEN_CB       = 0,
-	PHP_UV_READ_CB         = 1,
-	PHP_UV_READ2_CB        = 2,
-	PHP_UV_WRITE_CB        = 3,
-	PHP_UV_SHUTDOWN_CB     = 4,
-	PHP_UV_CLOSE_CB        = 5,
-	PHP_UV_TIMER_CB        = 6,
-	PHP_UV_IDLE_CB         = 7,
-	PHP_UV_CONNECT_CB      = 8,
-	PHP_UV_GETADDR_CB      = 9,
-	PHP_UV_RECV_CB         = 10,
-	PHP_UV_SEND_CB         = 11,
+enum php_uv_callback_type
+{
+	PHP_UV_LISTEN_CB = 0,
+	PHP_UV_READ_CB = 1,
+	PHP_UV_READ2_CB = 2,
+	PHP_UV_WRITE_CB = 3,
+	PHP_UV_SHUTDOWN_CB = 4,
+	PHP_UV_CLOSE_CB = 5,
+	PHP_UV_TIMER_CB = 6,
+	PHP_UV_IDLE_CB = 7,
+	PHP_UV_CONNECT_CB = 8,
+	PHP_UV_GETADDR_CB = 9,
+	PHP_UV_RECV_CB = 10,
+	PHP_UV_SEND_CB = 11,
 	PHP_UV_PIPE_CONNECT_CB = 12,
-	PHP_UV_PROC_CLOSE_CB   = 13,
-	PHP_UV_PREPARE_CB      = 14,
-	PHP_UV_CHECK_CB        = 15,
-	PHP_UV_ASYNC_CB        = 16,
-	PHP_UV_WORK_CB         = 17,
-	PHP_UV_AFTER_WORK_CB   = 18,
-	PHP_UV_FS_CB           = 19,
-	PHP_UV_FS_EVENT_CB     = 20,
-	PHP_UV_FS_POLL_CB      = 21,
-	PHP_UV_POLL_CB         = 22,
-	PHP_UV_SIGNAL_CB       = 23,
-	PHP_UV_CB_MAX          = 24
+	PHP_UV_PROC_CLOSE_CB = 13,
+	PHP_UV_PREPARE_CB = 14,
+	PHP_UV_CHECK_CB = 15,
+	PHP_UV_ASYNC_CB = 16,
+	PHP_UV_WORK_CB = 17,
+	PHP_UV_AFTER_WORK_CB = 18,
+	PHP_UV_FS_CB = 19,
+	PHP_UV_FS_EVENT_CB = 20,
+	PHP_UV_FS_POLL_CB = 21,
+	PHP_UV_POLL_CB = 22,
+	PHP_UV_SIGNAL_CB = 23,
+	PHP_UV_CB_MAX = 24
 };
 
 typedef struct {
-    zend_fcall_info fci;
-    zend_fcall_info_cache fcc;
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
 } php_uv_cb_t;
 
 typedef struct {
 	zend_object std;
-
-#if defined(ZTS) && PHP_VERSION_ID < 80000
-	void ***thread_ctx;
-#endif
 	int type;
 	uv_os_sock_t sock;
-	union {
+	union
+	{
 		uv_tcp_t tcp;
 		uv_udp_t udp;
 		uv_pipe_t pipe;
@@ -182,8 +175,8 @@ typedef struct {
 
 typedef struct {
 	zend_object std;
-
-	union {
+	union
+	{
 		struct sockaddr_in ipv4;
 		struct sockaddr_in6 ipv6;
 	} addr;
@@ -194,7 +187,8 @@ typedef struct {
 
 	int locked;
 	enum php_uv_lock_type type;
-	union {
+	union
+	{
 		uv_rwlock_t rwlock;
 		uv_mutex_t mutex;
 		uv_sem_t semaphore;
@@ -219,20 +213,16 @@ typedef struct {
 } php_uv_loop_t;
 
 /* File/directory stat mode constants*/
-#ifdef PHP_WIN32
-#define S_IFDIR _S_IFDIR
-#define S_IFREG _S_IFREG
-#else
 #ifndef S_IFDIR
 #define S_IFDIR 0040000
 #endif
+
 #ifndef S_IFREG
 #define S_IFREG 0100000
 #endif
-#endif
 
 ZEND_BEGIN_MODULE_GLOBALS(uv)
-	php_uv_loop_t *default_loop;
+php_uv_loop_t *default_loop;
 ZEND_END_MODULE_GLOBALS(uv)
 
 #ifdef ZTS
@@ -244,5 +234,3 @@ ZEND_TSRMLS_CACHE_EXTERN()
 #else
 #define UV_G(v) (uv_globals.v)
 #endif
-
-#endif /* PHP_UV_H */
