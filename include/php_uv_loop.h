@@ -39,3 +39,5 @@ void clean_uv_handle(php_uv_t *uv);
 			RETURN_FALSE;                                            \
 		}                                                            \
 	} while (0)
+
+#define PHP_UV_IS_DTORED(uv) (GC_FLAGS(&uv->std) & IS_OBJ_DESTRUCTOR_CALLED)

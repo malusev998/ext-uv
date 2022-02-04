@@ -2,6 +2,8 @@
 
 #include "include/php_uv_private.h"
 
+zend_class_entry *uv_pipe_ce;
+
 extern void php_uv_handle_open(int (*open_cb)(uv_handle_t *, long), zend_class_entry *ce, INTERNAL_FUNCTION_PARAMETERS);
 
 static void php_uv_pipe_connect_cb(uv_connect_t *req, int status)
@@ -16,7 +18,6 @@ static void php_uv_pipe_connect_cb(uv_connect_t *req, int status)
 
 	php_uv_do_callback2(&retval, uv, params, 2, PHP_UV_PIPE_CONNECT_CB TSRMLS_CC);
 
-	// PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(uv_pipe_connect_cb, uv);
 	zval_ptr_dtor(&params[0]);
 	zval_ptr_dtor(&params[1]);
 
