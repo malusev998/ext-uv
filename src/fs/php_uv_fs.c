@@ -5,7 +5,7 @@
 
 #include "include/php_uv_private.h"
 #include "php_uv.h"
-#include "src/args/fs/uv_fs.h"
+#include "src/args/fs/uv_fs_common.h"
 
 zend_class_entry *uv_fs_ce;
 
@@ -326,7 +326,6 @@ static void php_uv_fs_common(uv_fs_type fs_type, INTERNAL_FUNCTION_PARAMETERS)
 
 		PHP_UV_FS_PARSE_PARAMETERS(4, Z_PARAM_RESOURCE(z_instream) Z_PARAM_RESOURCE(z_outstream) Z_PARAM_LONG(offset) Z_PARAM_LONG(length));
 		PHP_UV_FS_SETUP()
-		/* TODO */
 		PHP_UV_ZVAL_TO_FD(in_fd, z_instream);
 		PHP_UV_ZVAL_TO_FD(out_fd, z_outstream);
 		uv->fs_fd = *z_outstream;

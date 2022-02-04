@@ -2,6 +2,25 @@
 
 #include <php.h>
 
+#define PHP_UV_CHECK_VALID_FD(fd, zstream)                                                  \
+	if (fd < 0)                                                                             \
+	{                                                                                       \
+		php_error_docref(NULL, E_WARNING, "invalid variable passed. can't convert to fd."); \
+		PHP_UV_DEINIT_UV(uv);                                                               \
+		RETURN_FALSE;                                                                       \
+	}                                                                                       \
+	if (Z_ISUNDEF(uv->fs_fd))                                                               \
+	{                                                                                       \
+		ZVAL_COPY(&uv->fs_fd, zstream);                                                     \
+	}
+
+#define PHP_UV_FD_TO_ZVAL(zv, fd)                                       \
+	{                                                                   \
+		php_stream *_stream = php_stream_fopen_from_fd(fd, "w+", NULL); \
+		zval *_z = (zv);                                                \
+		php_stream_to_zval(_stream, _z);                                \
+	}
+
 /* {{{ proto void uv_fs_open(UVLoop $loop, string $path, long $flag, long $mode, callable(long|resource $file_or_result) $callback)*/
 PHP_FUNCTION(uv_fs_open);
 /* }}} */
