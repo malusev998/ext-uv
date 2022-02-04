@@ -37,8 +37,10 @@ if test -z "$PHP_DEBUG"; then
 fi
 
 if test "$PHP_UV_DEBUG" != "no"; then
-    CFLAGS="$CFLAGS -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
+    CFLAGS="$CFLAGS -std=c17 -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
     AC_DEFINE(PHP_UV_DEBUG, 1, [Enable uv debug support])
+else
+  CFLAGS="$CFLAGS -std=c17"
 fi
 
 if test "$PHP_DTRACE" != "no"; then
@@ -120,7 +122,12 @@ if test $PHP_UV != "no"; then
 	PHP_SUBST([CFLAGS])
   PHP_SUBST(UV_SHARED_LIBADD)
 
-  PHP_NEW_EXTENSION(uv, php_uv.c uv.c, $ext_shared)
+  UV_FILE_SOURCES="\
+    src/fs/php_uv_pipe.c \
+    src/fs/php_uv_fs.c \
+  "
+
+  PHP_NEW_EXTENSION(uv, $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
   PHP_ADD_INCLUDE(./include)
   PHP_INSTALL_HEADERS([ext/uv], [php_uv.h])
   PHP_ADD_EXTENSION_DEP(uv, sockets, false)

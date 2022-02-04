@@ -33,39 +33,13 @@
 
 ZEND_DECLARE_MODULE_GLOBALS(uv);
 
+#include "include/php_uv_private.h"
+
 #include "src/args/uv_argsinfo.h"
+#include "src/args/uv_functions.h"
 
-#define uv_zend_wrong_parameter_class_error(throw, ...) zend_wrong_parameter_class_error(__VA_ARGS__)
-#define UV_PARAM_PROLOGUE Z_PARAM_PROLOGUE(0, 0)
-#define zend_internal_type_error(strict_types, ...) zend_type_error(__VA_ARGS__)
-
-#define UV_PARAM_OBJ_EX(dest, type, check_null, ce, ...) \
-	{ \
-		zval *zv; \
-		UV_PARAM_PROLOGUE \
-		if (UNEXPECTED(!uv_parse_arg_object(_arg, &zv, check_null, ce, ##__VA_ARGS__, NULL))) { \
-			if (!(_flags & ZEND_PARSE_PARAMS_QUIET)) { \
-				zend_string *names = php_uv_concat_ce_names(ce, ##__VA_ARGS__, NULL); \
-				uv_zend_wrong_parameter_class_error(_flags & ZEND_PARSE_PARAMS_THROW, _i, ZSTR_VAL(names), _arg); \
-				zend_string_release(names); \
-			} \
-			_error_code = ZPP_ERROR_FAILURE; \
-			break; \
-		} \
-		if (GC_FLAGS(Z_OBJ_P(zv)) & IS_OBJ_DESTRUCTOR_CALLED) { \
-			if (!(_flags & ZEND_PARSE_PARAMS_QUIET)) { \
-				php_error_docref(NULL, E_WARNING, "passed %s handle is already closed", ZSTR_VAL(Z_OBJCE_P(_arg)->name)); \
-			} \
-			_error_code = ZPP_ERROR_FAILURE; \
-			break; \
-		} \
-		dest = zv == NULL ? NULL : (type *) Z_OBJ_P(zv); \
-	}
-
-#define UV_PARAM_OBJ(dest, type, ...) UV_PARAM_OBJ_EX(dest, type, 0, ##__VA_ARGS__, NULL)
-#define UV_PARAM_OBJ_NULL(dest, type, ...) UV_PARAM_OBJ_EX(dest, type, 1, ##__VA_ARGS__, NULL)
-
-static ZEND_COLD zend_string *php_uv_concat_ce_names(zend_class_entry *ce, zend_class_entry *next, ...) {
+ZEND_COLD zend_string *php_uv_concat_ce_names(zend_class_entry *ce, zend_class_entry *next, ...)
+{
 	va_list va;
 	smart_str buf = {0};
 
@@ -96,9 +70,11 @@ start:
 
 /* gcc complains: sorry, unimplemented: function ‘uv_parse_arg_object’ can never be inlined because it uses variable argument lists */
 #ifdef __clang__
-static zend_always_inline int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
+zend_always_inline int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...)
+{
 #else
-static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...) {
+int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_class_entry *ce, ...)
+{
 #endif
 	if (EXPECTED(Z_TYPE_P(arg) == IS_OBJECT)) {
 		va_list va;
@@ -118,50 +94,20 @@ static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_clas
 	return 0;
 }
 
-#define PHP_UV_DEINIT_UV(uv) \
-	clean_uv_handle(uv); \
-	OBJ_RELEASE(&uv->std);
-
-#define PHP_UV_INIT_GENERIC(dest, type, ce) \
-	do { \
-		zval zv; \
-		object_init_ex(&zv, ce); \
-		dest = (type *) Z_OBJ(zv); \
-	} while (0)
-
-#define PHP_UV_INIT_UV(uv, ce) PHP_UV_INIT_GENERIC(uv, php_uv_t, ce)
-
-#define PHP_UV_INIT_UV_EX(_uv, ce, cb, ...) \
-	do { \
-		int r; \
-		PHP_UV_INIT_UV(_uv, ce); \
-		r = cb(&loop->loop, (void *) &_uv->uv.handle, ##__VA_ARGS__); \
-		if (r) { \
-			PHP_UV_DEINIT_UV(_uv); \
-			php_error_docref(NULL, E_WARNING, #cb " failed"); \
-			RETURN_FALSE; \
-		} \
-	} while (0)
-
 #define PHP_UV_INIT_CONNECT(req, uv) \
 	req = (uv_connect_t *) emalloc(sizeof(uv_connect_t)); \
 	req->data = uv;
 
-#define PHP_UV_INIT_WRITE_REQ(w, uv, str, strlen, cb) \
-	w = (write_req_t *) emalloc(sizeof(write_req_t)); \
-	w->req.data = uv; \
+#define PHP_UV_INIT_WRITE_REQ(w, uv, str, strlen, cb)    \
+	w = (write_req_t *)emalloc(sizeof(write_req_t));     \
+	w->req.data = uv;                                    \
 	w->buf = uv_buf_init(estrndup(str, strlen), strlen); \
-	w->cb = cb; \
+	w->cb = cb;
 
-#define PHP_UV_INIT_SEND_REQ(w, uv, str, strlen) \
-	w = (send_req_t *) emalloc(sizeof(send_req_t)); \
-	w->req.data = uv; \
-	w->buf = uv_buf_init(estrndup(str, strlen), strlen); \
-
-#define PHP_UV_FETCH_UV_DEFAULT_LOOP(loop) \
-	if (loop == NULL) { \
-		loop = php_uv_default_loop(); \
-	}  \
+#define PHP_UV_INIT_SEND_REQ(w, uv, str, strlen)   \
+	w = (send_req_t *)emalloc(sizeof(send_req_t)); \
+	w->req.data = uv;                              \
+	w->buf = uv_buf_init(estrndup(str, strlen), strlen);
 
 #define PHP_UV_INIT_LOCK(lock, lock_type) \
 	PHP_UV_INIT_GENERIC(lock, php_uv_lock_t, uv_lock_ce); \
@@ -232,67 +178,47 @@ static int uv_parse_arg_object(zval *arg, zval **dest, int check_null, zend_clas
 
 #define PHP_UV_FD_TO_ZVAL(zv, fd) { php_stream *_stream = php_stream_fopen_from_fd(fd, "w+", NULL); zval *_z = (zv); php_stream_to_zval(_stream, _z); }
 
-#if PHP_UV_DEBUG>=1
-#define PHP_UV_DEBUG_PRINT(format, ...) fprintf(stderr, format, ## __VA_ARGS__)
-#else
-#define PHP_UV_DEBUG_PRINT(format, ...)
-#endif
-
-#if PHP_UV_DEBUG>=1
-#define PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(handler, uv) \
-	{ \
-		PHP_UV_DEBUG_PRINT("# %s add(%p - %s): %u->%u\n", #handler, uv, ZSTR_VAL(uv->std.ce->name), GC_REFCOUNT(&(uv)->std) - 1, GC_REFCOUNT(&(uv)->std)); \
-	}
-#define PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(handler, uv) \
-	{ \
-		PHP_UV_DEBUG_PRINT("# %s del(%p - %s): %u->%u\n", #handler, uv, ZSTR_VAL(uv->std.ce->name), GC_REFCOUNT(&(uv)->std), GC_REFCOUNT(&(uv)->std) - 1); \
-	}
-#else
-#define PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(hander, uv)
-#define PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(hander, uv)
-#endif
-
 /* objects */
 extern void php_uv_init(zend_class_entry *uv_ce);
 
-static zend_object_handlers uv_default_handlers;
+zend_object_handlers uv_default_handlers;
 
-static zend_class_entry *uv_ce;
-static zend_object_handlers uv_handlers;
+zend_class_entry *uv_ce;
+zend_object_handlers uv_handlers;
 
-static zend_class_entry *uv_stream_ce;
+zend_class_entry *uv_stream_ce;
 
-static zend_class_entry *uv_tcp_ce;
-static zend_class_entry *uv_udp_ce;
-static zend_class_entry *uv_pipe_ce;
-static zend_class_entry *uv_idle_ce;
-static zend_class_entry *uv_timer_ce;
-static zend_class_entry *uv_async_ce;
-static zend_class_entry *uv_addrinfo_ce;
-static zend_class_entry *uv_process_ce;
-static zend_class_entry *uv_prepare_ce;
-static zend_class_entry *uv_check_ce;
-static zend_class_entry *uv_work_ce;
-static zend_class_entry *uv_fs_ce;
-static zend_class_entry *uv_fs_event_ce;
-static zend_class_entry *uv_tty_ce;
-static zend_class_entry *uv_fs_poll_ce;
-static zend_class_entry *uv_poll_ce;
-static zend_class_entry *uv_signal_ce;
+zend_class_entry *uv_tcp_ce;
+zend_class_entry *uv_udp_ce;
+zend_class_entry *uv_idle_ce;
+zend_class_entry *uv_timer_ce;
+zend_class_entry *uv_async_ce;
+zend_class_entry *uv_pipe_ce;
+zend_class_entry *uv_addrinfo_ce;
+zend_class_entry *uv_process_ce;
+zend_class_entry *uv_prepare_ce;
+zend_class_entry *uv_check_ce;
+zend_class_entry *uv_work_ce;
+zend_class_entry *uv_fs_ce;
+zend_class_entry *uv_fs_event_ce;
+zend_class_entry *uv_tty_ce;
+zend_class_entry *uv_fs_poll_ce;
+zend_class_entry *uv_poll_ce;
+zend_class_entry *uv_signal_ce;
 
-static zend_class_entry *uv_loop_ce;
-static zend_object_handlers uv_loop_handlers;
+zend_class_entry *uv_loop_ce;
+zend_object_handlers uv_loop_handlers;
 
-static zend_class_entry *uv_sockaddr_ce;
+zend_class_entry *uv_sockaddr_ce;
 
-static zend_class_entry *uv_sockaddr_ipv4_ce;
-static zend_class_entry *uv_sockaddr_ipv6_ce;
+zend_class_entry *uv_sockaddr_ipv4_ce;
+zend_class_entry *uv_sockaddr_ipv6_ce;
 
-static zend_class_entry *uv_lock_ce;
-static zend_object_handlers uv_lock_handlers;
+zend_class_entry *uv_lock_ce;
+zend_object_handlers uv_lock_handlers;
 
-static zend_class_entry *uv_stdio_ce;
-static zend_object_handlers uv_stdio_handlers;
+zend_class_entry *uv_stdio_ce;
+zend_object_handlers uv_stdio_handlers;
 
 typedef struct {
 	uv_write_t req;
@@ -328,9 +254,6 @@ static void php_uv_fs_cb(uv_fs_t* req);
  */
 static int php_uv_do_callback(zval *retval_ptr, php_uv_cb_t *callback, zval *params, int param_count TSRMLS_DC);
 
-void static destruct_uv(zend_object *obj);
-void static clean_uv_handle(php_uv_t *uv);
-
 static void php_uv_tcp_connect_cb(uv_connect_t *conn_req, int status);
 
 static void php_uv_write_cb(uv_write_t* req, int status);
@@ -353,8 +276,7 @@ static void php_uv_idle_cb(uv_timer_t *handle);
 
 static void php_uv_signal_cb(uv_signal_t *handle, int sig_num);
 
-
-static php_uv_loop_t *php_uv_default_loop()
+php_uv_loop_t *php_uv_default_loop()
 {
 	if (UV_G(default_loop) == NULL) {
 		zval zv;
@@ -461,7 +383,7 @@ static php_socket_t php_uv_zval_to_fd(zval *ptr)
 	return fd;
 }
 
-static const char* php_uv_strerror(long error_code)
+const char *php_uv_strerror(long error_code)
 {
 	/* Note: uv_strerror doesn't use assert. we don't need check value here */
 	return uv_strerror(error_code);
@@ -483,7 +405,7 @@ static php_uv_cb_t* php_uv_cb_init_dynamic(php_uv_t *uv, zend_fcall_info *fci, z
 	return cb;
 }
 
-static void php_uv_cb_init(php_uv_cb_t **result, php_uv_t *uv, zend_fcall_info *fci, zend_fcall_info_cache *fcc, enum php_uv_callback_type type)
+void php_uv_cb_init(php_uv_cb_t **result, php_uv_t *uv, zend_fcall_info *fci, zend_fcall_info_cache *fcc, enum php_uv_callback_type type)
 {
 	php_uv_cb_t *cb;
 
@@ -1211,7 +1133,7 @@ void static free_uv_loop(zend_object *obj)
 	}
 }
 
-void static clean_uv_handle(php_uv_t *uv) {
+void clean_uv_handle(php_uv_t *uv) {
 	int i;
 
 	/* for now */
@@ -1243,7 +1165,7 @@ void static clean_uv_handle(php_uv_t *uv) {
 	}
 }
 
-void static destruct_uv(zend_object *obj)
+void destruct_uv(zend_object *obj)
 {
 	php_uv_t *uv = (php_uv_t *) obj;
 
@@ -1306,7 +1228,7 @@ static int php_uv_do_callback(zval *retval_ptr, php_uv_cb_t *callback, zval *par
 	return error;
 }
 
-static int php_uv_do_callback2(zval *retval_ptr, php_uv_t *uv, zval *params, int param_count, enum php_uv_callback_type type TSRMLS_DC)
+int php_uv_do_callback2(zval *retval_ptr, php_uv_t *uv, zval *params, int param_count, enum php_uv_callback_type type TSRMLS_DC)
 {
 	int error = 0;
 	if (ZEND_FCI_INITIALIZED(uv->callback[type]->fci))
@@ -1481,28 +1403,6 @@ static void php_uv_process_close_cb(uv_process_t* process, int64_t exit_status, 
 
 	zval_ptr_dtor(&retval);
 }
-
-
-static void php_uv_pipe_connect_cb(uv_connect_t *req, int status)
-{
-	zval retval = {0};
-	zval params[2] = {0};
-	php_uv_t *uv = (php_uv_t*)req->data;
-	TSRMLS_FETCH_FROM_CTX(uv->thread_ctx);
-
-	ZVAL_OBJ(&params[0], &uv->std);
-	ZVAL_LONG(&params[1], status);
-
-	php_uv_do_callback2(&retval, uv, params, 2, PHP_UV_PIPE_CONNECT_CB TSRMLS_CC);
-
-	PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(uv_pipe_connect_cb, uv);
-	zval_ptr_dtor(&params[0]);
-	zval_ptr_dtor(&params[1]);
-
-	zval_ptr_dtor(&retval);
-	efree(req);
-}
-
 
 static void php_uv_walk_cb(uv_handle_t* handle, void* arg)
 {
@@ -2341,7 +2241,7 @@ static void php_uv_socket_getname(int type, INTERNAL_FUNCTION_PARAMETERS)
 	RETURN_ZVAL(&result, 0, 1);
 }
 
-static void php_uv_handle_open(int (*open_cb)(uv_handle_t *, long), zend_class_entry *ce, INTERNAL_FUNCTION_PARAMETERS) {
+void php_uv_handle_open(int (*open_cb)(uv_handle_t *, long), zend_class_entry *ce, INTERNAL_FUNCTION_PARAMETERS) {
 	php_uv_t *uv;
 	zval *zstream;
 	zend_long fd; // file handle
@@ -3893,133 +3793,6 @@ PHP_FUNCTION(uv_guess_handle)
 	type = uv_guess_handle(fd);
 
 	RETURN_LONG(type);
-}
-/* }}} */
-
-
-/* {{{ proto UVPipe uv_pipe_init([UVLoop $loop = uv_default_loop(), bool $ipc = false])
-*/
-PHP_FUNCTION(uv_pipe_init)
-{
-	php_uv_t *uv;
-	php_uv_loop_t *loop = NULL;
-	zend_bool ipc = 0;
-
-	ZEND_PARSE_PARAMETERS_START(0, 2)
-		Z_PARAM_OPTIONAL
-		UV_PARAM_OBJ_NULL(loop, php_uv_loop_t, uv_loop_ce)
-		Z_PARAM_BOOL(ipc)
-	ZEND_PARSE_PARAMETERS_END();
-
-	PHP_UV_FETCH_UV_DEFAULT_LOOP(loop);
-
-	PHP_UV_INIT_UV_EX(uv, uv_pipe_ce, uv_pipe_init, (int) ipc);
-
-	RETURN_OBJ(&uv->std);
-}
-/* }}} */
-
-/* {{{ proto long|false uv_pipe_open(UVPipe $handle, resource|long $pipe)
-*/
-PHP_FUNCTION(uv_pipe_open)
-{
-	php_uv_handle_open((int (*)(uv_handle_t *, long)) uv_pipe_open, uv_pipe_ce, INTERNAL_FUNCTION_PARAM_PASSTHRU);
-}
-/* }}} */
-
-/* {{{ proto long uv_pipe_bind(UVPipe $handle, string $name)
-*/
-PHP_FUNCTION(uv_pipe_bind)
-{
-	php_uv_t *uv;
-	zend_string *name;
-	int error;
-
-	ZEND_PARSE_PARAMETERS_START(2, 2)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_pipe_ce)
-		Z_PARAM_STR(name)
-	ZEND_PARSE_PARAMETERS_END();
-
-	error = uv_pipe_bind(&uv->uv.pipe, name->val);
-	if (error) {
-		php_error_docref(NULL, E_WARNING, "%s", php_uv_strerror(error));
-	}
-
-	RETURN_LONG(error);
-}
-/* }}} */
-
-/* {{{ proto void uv_pipe_connect(UVPipe $handle, string $path, callable(UVPipe $handle, long $status) $callback)
-*/
-PHP_FUNCTION(uv_pipe_connect)
-{
-	php_uv_t *uv;
-	zend_string *name;
-	uv_connect_t *req;
-	zend_fcall_info fci       = empty_fcall_info;
-	zend_fcall_info_cache fcc = empty_fcall_info_cache;
-	php_uv_cb_t *cb;
-
-	ZEND_PARSE_PARAMETERS_START(3, 3)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_pipe_ce)
-		Z_PARAM_STR(name)
-		Z_PARAM_FUNC(fci, fcc)
-	ZEND_PARSE_PARAMETERS_END();
-
-	GC_ADDREF(&uv->std);
-	PHP_UV_DEBUG_OBJ_ADD_REFCOUNT(uv_pipe_connect, uv);
-
-	req = (uv_connect_t *) emalloc(sizeof(uv_connect_t));
-	php_uv_cb_init(&cb, uv, &fci, &fcc, PHP_UV_PIPE_CONNECT_CB);
-
-	req->data = uv;
-	uv_pipe_connect(req, &uv->uv.pipe, name->val, php_uv_pipe_connect_cb);
-}
-/* }}} */
-
-/* {{{ proto void uv_pipe_pending_instances(UVPipe $handle, long $count)
-*/
-PHP_FUNCTION(uv_pipe_pending_instances)
-{
-	php_uv_t *uv;
-	zend_long count;
-
-	ZEND_PARSE_PARAMETERS_START(2, 2)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_pipe_ce)
-		Z_PARAM_LONG(count)
-	ZEND_PARSE_PARAMETERS_END();
-
-	uv_pipe_pending_instances(&uv->uv.pipe, count);
-}
-/* }}} */
-
-/* {{{ proto void uv_pipe_pending_count(UVPipe $handle)
-*/
-PHP_FUNCTION(uv_pipe_pending_count)
-{
-	php_uv_t *uv;
-
-	ZEND_PARSE_PARAMETERS_START(1, 1)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_pipe_ce)
-	ZEND_PARSE_PARAMETERS_END();
-
-	RETURN_LONG(uv_pipe_pending_count(&uv->uv.pipe));
-}
-/* }}} */
-
-/* {{{ proto void uv_pipe_pending_type(UVPipe $handle)
-*/
-PHP_FUNCTION(uv_pipe_pending_type)
-{
-	php_uv_t *uv;
-	uv_handle_type ret;
-
-	ZEND_PARSE_PARAMETERS_START(1, 1)
-		UV_PARAM_OBJ(uv, php_uv_t, uv_pipe_ce)
-	ZEND_PARSE_PARAMETERS_END();
-
-	ret = uv_pipe_pending_type(&uv->uv.pipe);
-	RETURN_LONG(ret);
 }
 /* }}} */
 
