@@ -122,13 +122,19 @@ if test $PHP_UV != "no"; then
 	PHP_SUBST([CFLAGS])
   PHP_SUBST(UV_SHARED_LIBADD)
 
+  UV_SRC="\
+    src/php_uv_cb.c \
+  "
+
   UV_FILE_SOURCES="\
     src/fs/php_uv_pipe.c \
     src/fs/php_uv_fs.c \
     src/fs/php_uv_fs_poll.c \
+    src/fs/php_uv_fs_event.c \
+    src/fs/php_uv_stream.c \
   "
 
-  PHP_NEW_EXTENSION(uv, $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
+  PHP_NEW_EXTENSION(uv, $UV_SRC $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
   PHP_ADD_INCLUDE(./include)
   PHP_INSTALL_HEADERS([ext/uv], [php_uv.h])
   PHP_ADD_EXTENSION_DEP(uv, sockets, false)

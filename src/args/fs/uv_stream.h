@@ -2,6 +2,8 @@
 
 #include <php.h>
 
+static void php_uv_read_alloc(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
+
 /* {{{ proto void uv_write(UVStream $handle, string $data[, callable(UVStream $handle, long $status) $callback = function() {}]) */
 PHP_FUNCTION(uv_write);
 /* }}} */
