@@ -16,7 +16,8 @@ jobs:
     steps:
       - name: 'Checkout PHP UV with LibUV submodule'
         uses: actions/checkout@v2
-        submodules: true
+        with:
+          submodules: true
       - name: 'Setup PHP'
         uses: shivammathur/setup-php@v2
         with:
@@ -25,7 +26,7 @@ jobs:
         env:
           fail-fast: true
       - name: 'Compiling LibUV'
-        working-directory: 'subprojects/libuv'
+        working-directory: 'third-party/libuv'
         run: |
           ./autogen.sh
           ./configure --prefix=$(readlink -f `pwd`/../../libuv)
