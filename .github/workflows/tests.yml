@@ -26,7 +26,7 @@ jobs:
         env:
           fail-fast: true
       - name: 'Compiling LibUV'
-        working-directory: 'subprojects/libuv'
+        working-directory: 'third-party/libuv'
         run: |
           ./autogen.sh
           ./configure --prefix=$(readlink -f `pwd`/../../libuv)
