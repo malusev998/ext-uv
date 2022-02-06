@@ -1,0 +1,42 @@
+name: 'Tests'
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    strategy:
+      matrix:
+        php:
+          - 8.1
+          - 8.0
+    name: Tests (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout PHP UV with LibUV submodule'
+        uses: actions/checkout@v2
+        submodules: true
+      - name: 'Setup PHP'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: behat, php-config, phpize, composer, pecl
+        env:
+          fail-fast: true
+      - name: 'Compiling LibUV'
+        working-directory: 'subprojects/libuv'
+        run: |
+          ./autogen.sh
+          ./configure --prefix=$(readlink -f `pwd`/../../libuv)
+          make -j8
+          make install
+      - name: 'Compiling PHP UV extension'
+        run: |
+          phpize
+          ./configure --with-uv=$(readlink -f `pwd`/libuv)
+          make -j8
+          sudo make install
+          echo "extension = uv.so" >> $(php -r 'echo php_ini_loaded_file();')
+      # - name: 'Running Tests'
+      #   run: php run-tests.php -p `which php` --offline --show-diff --set-timeout 120

@@ -1,4 +1,0 @@
-
-[submodule "subprojects/libuv"]
-	path = subprojects/libuv
-	url = https://github.com/libuv/libuv.git
