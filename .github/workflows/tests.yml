@@ -16,7 +16,8 @@ jobs:
     steps:
       - name: 'Checkout PHP UV with LibUV submodule'
         uses: actions/checkout@v2
-        submodules: true
+        with:
+          submodules: true
       - name: 'Setup PHP'
         uses: shivammathur/setup-php@v2
         with:
