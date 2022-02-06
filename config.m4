@@ -129,9 +129,11 @@ if test $PHP_UV != "no"; then
   UV_FILE_SOURCES="\
     src/fs/php_uv_pipe.c \
     src/fs/php_uv_fs.c \
+    src/fs/php_uv_fs_common.c \
     src/fs/php_uv_fs_poll.c \
     src/fs/php_uv_fs_event.c \
     src/fs/php_uv_stream.c \
+    src/fs/php_uv_poll.c \
   "
 
   PHP_NEW_EXTENSION(uv, $UV_SRC $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)

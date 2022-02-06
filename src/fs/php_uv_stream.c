@@ -74,8 +74,6 @@ static void php_uv_write_cb(uv_write_t *req, int status)
 	php_uv_t *uv = (php_uv_t *)req->handle->data;
 	TSRMLS_FETCH_FROM_CTX(uv->thread_ctx);
 
-	PHP_UV_DEBUG_PRINT("uv_write_cb: status: %d\n", status);
-
 	ZVAL_OBJ(&params[0], &uv->std);
 	ZVAL_LONG(&params[1], status);
 
@@ -86,10 +84,8 @@ static void php_uv_write_cb(uv_write_t *req, int status)
 		uv_stop(uv->uv.handle.loop);
 	}
 
-	PHP_UV_DEBUG_OBJ_DEL_REFCOUNT(uv_write_cb, uv);
 	zval_ptr_dtor(&params[0]);
 	zval_ptr_dtor(&params[1]);
-
 	zval_ptr_dtor(&retval);
 
 	php_uv_free_write_req(wr);

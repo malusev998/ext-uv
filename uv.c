@@ -57,7 +57,6 @@ void php_uv_init(zend_class_entry *uv_class_entry)
 	zend_declare_class_constant_long(uv_class_entry, "S_IWOTH",  sizeof("S_IWOTH")-1, S_IWOTH TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "S_IXOTH",  sizeof("S_IXOTH")-1, S_IXOTH TSRMLS_CC);
 
-	/* Non-windows Signal Constants */
 	zend_declare_class_constant_long(uv_class_entry, "SIG_IGN",  sizeof("SIG_IGN")-1, (long) SIG_IGN TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIG_DFL",  sizeof("SIG_DFL")-1, (long) SIG_DFL TSRMLS_CC);
 	zend_declare_class_constant_long(uv_class_entry, "SIG_ERR",  sizeof("SIG_ERR")-1, (long) SIG_ERR TSRMLS_CC);

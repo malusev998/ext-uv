@@ -5,69 +5,55 @@
 
 int php_uv_do_callback(zval *retval_ptr, php_uv_cb_t *callback, zval *params, int param_count TSRMLS_DC)
 {
-	int error;
-
-	if (ZEND_FCI_INITIALIZED(callback->fci))
+	if (!ZEND_FCI_INITIALIZED(callback->fci))
 	{
-		callback->fci.params = params;
-		callback->fci.retval = retval_ptr;
-		callback->fci.param_count = param_count;
-
-		error = zend_call_function(&callback->fci, &callback->fcc);
-	}
-	else
-	{
-		error = -1;
+		return -1;
 	}
 
-	return error;
+	callback->fci.params = params;
+	callback->fci.retval = retval_ptr;
+	callback->fci.param_count = param_count;
+
+	return zend_call_function(&callback->fci, &callback->fcc);
 }
 
 int php_uv_do_callback2(zval *retval_ptr, php_uv_t *uv, zval *params, int param_count, enum php_uv_callback_type type TSRMLS_DC)
 {
-	int error = 0;
-	if (ZEND_FCI_INITIALIZED(uv->callback[type]->fci))
-	{
-		uv->callback[type]->fci.params = params;
-		uv->callback[type]->fci.retval = retval_ptr;
-		uv->callback[type]->fci.param_count = param_count;
-		if (zend_call_function(&uv->callback[type]->fci, &uv->callback[type]->fcc) != SUCCESS)
-		{
-			error = -1;
-		}
-	}
-	else
-	{
-		error = -2;
-	}
-	// zend_fcall_info_args_clear(&uv->callback[type]->fci, 0);
+	int error = php_uv_do_callback(retval_ptr, uv->callback[type], params, param_count);
+
+	uv_loop_t *loop = NULL;
 
 	if (EG(exception))
 	{
 		switch (type)
 		{
 		case PHP_UV_FS_CB:
-			uv_stop(uv->uv.fs.loop);
+			loop = uv->uv.fs.loop;
 			break;
 		case PHP_UV_GETADDR_CB:
-			uv_stop(uv->uv.addrinfo.loop);
+			loop = uv->uv.addrinfo.loop;
 			break;
 		case PHP_UV_AFTER_WORK_CB:
-			uv_stop(uv->uv.work.loop);
+			loop = uv->uv.work.loop;
 			break;
 		case PHP_UV_SHUTDOWN_CB:
-			uv_stop(uv->uv.shutdown.handle->loop);
+			loop = uv->uv.shutdown.handle->loop;
 			break;
 		case PHP_UV_SEND_CB:
-			uv_stop(uv->uv.udp_send.handle->loop);
+			loop = uv->uv.udp_send.handle->loop;
 			break;
 		case PHP_UV_CONNECT_CB:
 		case PHP_UV_PIPE_CONNECT_CB:
-			uv_stop(uv->uv.connect.handle->loop);
+			loop = uv->uv.connect.handle->loop;
 			break;
 		default:
-			uv_stop(uv->uv.handle.loop);
+			loop = uv->uv.handle.loop;
 		}
+	}
+
+	if (loop != NULL)
+	{
+		uv_stop(loop);
 	}
 
 	return error;

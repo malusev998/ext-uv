@@ -59,7 +59,8 @@
 #define TSRMLS_SET_CTX(ctx)
 #endif
 
-/* Define the entry point symbol
+/*
+ * Define the entry point symbol
  * Zend will use when loading this module
  */
 extern zend_module_entry uv_module_entry;
