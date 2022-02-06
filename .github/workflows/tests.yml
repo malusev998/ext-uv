@@ -22,6 +22,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          extensions: sockets
           tools: behat, php-config, phpize, composer, pecl
         env:
           fail-fast: true
