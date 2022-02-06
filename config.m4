@@ -4,9 +4,29 @@ PHP_ARG_WITH(uv, Whether to include "uv" support,
 PHP_ARG_ENABLE(uv-debug, for uv debug support,
     [ --enable-uv-debug       Enable enable uv debug support], no, no)
 
+PHP_ARG_ENABLE(libuv-static, for uv debug support,
+    [ --enable-libuv-static  Link LibUV staticly], yes, no)
+
+
 PHP_ARG_ENABLE(dtrace, Whether to enable the "dtrace" debug,
     [ --enable-dtrace         Enable "dtrace" support], no, no)
 
+AC_MSG_CHECKING([for supported PHP version])
+
+if test -z "$PHP_VERSION"; then
+  if test -z "$PHP_CONFIG"; then
+    AC_MSG_ERROR([php-config not found])
+  fi
+  PHP_UV_FOUND_PHP_VERSION=`$PHP_CONFIG --version`
+else
+  PHP_UV_FOUND_PHP_VERSION="$PHP_VERSION"
+fi
+
+if test "$PHP_UV_FOUND_PHP_VERSION" -lt "80000"; then
+  AC_MSG_ERROR([not supported. PHP version 8.0.0+ required (found $PHP_UV_FOUND_PHP_VERSION)])
+else
+  AC_MSG_RESULT([supported ($PHP_UV_FOUND_PHP_VERSION)])
+fi
 
 if test -z "$PHP_DEBUG"; then
     AC_ARG_ENABLE(debug,
@@ -17,8 +37,10 @@ if test -z "$PHP_DEBUG"; then
 fi
 
 if test "$PHP_UV_DEBUG" != "no"; then
-    CFLAGS="$CFLAGS -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
+    CFLAGS="$CFLAGS -std=c17 -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
     AC_DEFINE(PHP_UV_DEBUG, 1, [Enable uv debug support])
+else
+  CFLAGS="$CFLAGS -std=c17"
 fi
 
 if test "$PHP_DTRACE" != "no"; then
@@ -38,15 +60,24 @@ if test "$PHP_DTRACE" != "no"; then
 fi
 
 if test $PHP_UV != "no"; then
-    PHP_NEW_EXTENSION(uv, php_uv.c uv.c, $ext_shared)
-
-    PHP_ADD_EXTENSION_DEP(uv, sockets, true)
-
     AC_PATH_PROG(PKG_CONFIG, pkg-config, no)
 
     AC_MSG_CHECKING(for libuv)
 
-    if test $PHP_UV == "yes" && test -x "$PKG_CONFIG" && $PKG_CONFIG --exists libuv; then
+    if test "$PHP_LIBUV_STATIC" == "yes" && test $PHP_UV == "yes" && test -x "$PKG_CONFIG" && $PKG_CONFIG --exists libuv-static; then
+      if $PKG_CONFIG libuv --atleast-version 1.0.0; then
+        LIBUV_INCLINE=`$PKG_CONFIG libuv-static --cflags`
+        LIBUV_LIBLINE=`$PKG_CONFIG libuv-static --libs`
+        LIBUV_VERSION=`$PKG_CONFIG libuv-static --modversion`
+        AC_MSG_RESULT(from pkgconfig: found version $LIBUV_VERSION)
+        AC_DEFINE(HAVE_UVLIB,1,[ ])
+      else
+        AC_MSG_ERROR(system libuv must be upgraded to version >= 1.0.0)
+      fi
+      PHP_EVAL_LIBLINE($LIBUV_LIBLINE, UV_SHARED_LIBADD)
+      PHP_EVAL_INCLINE($LIBUV_INCLINE)
+
+    elif test $PHP_UV == "yes" && test -x "$PKG_CONFIG" && $PKG_CONFIG --exists libuv; then
       if $PKG_CONFIG libuv --atleast-version 1.0.0; then
         LIBUV_INCLINE=`$PKG_CONFIG libuv --cflags`
         LIBUV_LIBLINE=`$PKG_CONFIG libuv --libs`
@@ -58,7 +89,6 @@ if test $PHP_UV != "no"; then
       fi
       PHP_EVAL_LIBLINE($LIBUV_LIBLINE, UV_SHARED_LIBADD)
       PHP_EVAL_INCLINE($LIBUV_INCLINE)
-
     else
       SEARCH_PATH="/usr/local /usr"
       SEARCH_FOR="/include/uv.h"
@@ -81,7 +111,7 @@ if test $PHP_UV != "no"; then
       ],[
         AC_MSG_ERROR([wrong uv library version or library not found])
       ],[
-        -L$UV_DIR/$PHP_LIBDIR -lm
+        -L$UV_DIR/$PHP_LIBDIR -lm -luv
       ])
       case $host in
           *linux*)
@@ -90,5 +120,24 @@ if test $PHP_UV != "no"; then
     fi
 
 	PHP_SUBST([CFLAGS])
-    PHP_SUBST(UV_SHARED_LIBADD)
+  PHP_SUBST(UV_SHARED_LIBADD)
+
+  UV_SRC="\
+    src/php_uv_cb.c \
+  "
+
+  UV_FILE_SOURCES="\
+    src/fs/php_uv_pipe.c \
+    src/fs/php_uv_fs.c \
+    src/fs/php_uv_fs_common.c \
+    src/fs/php_uv_fs_poll.c \
+    src/fs/php_uv_fs_event.c \
+    src/fs/php_uv_stream.c \
+    src/fs/php_uv_poll.c \
+  "
+
+  PHP_NEW_EXTENSION(uv, $UV_SRC $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
+  PHP_ADD_INCLUDE(./include)
+  PHP_INSTALL_HEADERS([ext/uv], [php_uv.h])
+  PHP_ADD_EXTENSION_DEP(uv, sockets, false)
 fi
