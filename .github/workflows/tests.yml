@@ -51,7 +51,7 @@ jobs:
           phpize
           ./configure --with-uv=$(readlink -f `pwd`/libuv)
           make -j8
-          sudo make install
+           make install
           echo "extension = uv.so" >> $(php -r 'echo php_ini_loaded_file();')
       # - name: 'Running Tests'
       #   run: php run-tests.php -p `which php` --offline --show-diff --set-timeout 120
@@ -76,7 +76,7 @@ jobs:
           phpize
           ./configure --with-uv=$(readlink -f `pwd`/libuv)
           make -j8
-          sudo make install
+           make install
           echo "extension = uv.so" >> $(php -r 'echo php_ini_loaded_file();')
       # - name: 'Running Tests'
       #   run: php run-tests.php -p `which php` --offline --show-diff --set-timeout 120
@@ -101,7 +101,7 @@ jobs:
           phpize
           ./configure --with-uv=$(readlink -f `pwd`/libuv)
           make -j8
-          sudo make install
+           make install
           echo "extension = uv.so" >> $(php -r 'echo php_ini_loaded_file();')
       # - name: 'Running Tests'
       #   run: php run-tests.php -p `which php` --offline --show-diff --set-timeout 120
