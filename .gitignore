@@ -40,7 +40,7 @@ config.sub
 
 # ignore dtrace header
 phpuv_dtrace.h
-
+libuv/
 # ignore config.h files
 config.h.in~
 config.h

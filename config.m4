@@ -37,11 +37,11 @@ if test -z "$PHP_DEBUG"; then
 fi
 
 if test "$PHP_UV_DEBUG" != "no"; then
-    CFLAGS="$CFLAGS -std=c17 -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
+    CFLAGS="$CFLAGS -Wall -g -ggdb -O0 -DPHP_UV_DEBUG=1"
     AC_DEFINE(PHP_UV_DEBUG, 1, [Enable uv debug support])
-else
-  CFLAGS="$CFLAGS -std=c17"
 fi
+
+CFLAGS="$CFLAGS -std=gnu17"
 
 if test "$PHP_DTRACE" != "no"; then
     dnl TODO: we should move this line to Makefile.frag or somewhere.
