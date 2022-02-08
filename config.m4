@@ -126,6 +126,12 @@ if test $PHP_UV != "no"; then
     src/php_uv_cb.c \
   "
 
+  UV_LOCKS_SOURCES="\
+    src/locks/php_uv_mutex.c \
+    src/locks/php_uv_rwlock.c \
+    src/locks/php_uv_semaphore.c \
+  "
+
   UV_FILE_SOURCES="\
     src/fs/php_uv_pipe.c \
     src/fs/php_uv_fs.c \
@@ -136,7 +142,7 @@ if test $PHP_UV != "no"; then
     src/fs/php_uv_poll.c \
   "
 
-  PHP_NEW_EXTENSION(uv, $UV_SRC $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
+  PHP_NEW_EXTENSION(uv, $UV_LOCKS_SOURCES $UV_SRC $UV_FILE_SOURCES php_uv.c uv.c, $ext_shared)
   PHP_ADD_INCLUDE(./include)
   PHP_INSTALL_HEADERS([ext/uv], [php_uv.h])
   PHP_ADD_EXTENSION_DEP(uv, sockets, false)
